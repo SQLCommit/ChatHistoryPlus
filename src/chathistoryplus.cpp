@@ -13,8 +13,6 @@
 
 namespace
 {
-    // kind: SPLICE = a function we will detour or call; DIVISOR = a function anchor holding imm32
-    // records-per-page values at fixed offsets; DATAREF = the operand is the address of a global.
     enum Kind : uint8_t { K_SPLICE = 0, K_DIVISOR = 1, K_DATAREF = 2 };
 
     struct Sig
@@ -40,7 +38,6 @@ namespace
     const uint8_t s_resolve[] = { 0x8B,0x44,0x24,0x04,0x85,0xC0,0x7C,0x2C,0x33,0xD2 };
     const uint8_t s_recount[] = { 0x53,0xC6,0x81,0xC8,0x00,0x00,0x00,0x00,0x33,0xD2 };
     const uint8_t s_freeblob[] = { 0x53,0x56,0x8B,0xF1,0x33,0xDB,0x8B,0x86,0xCC,0x00,0x00,0x00 };
-    const uint8_t s_mtadd[] = { 0x8B,0x44,0x24,0x04,0x56,0x8B,0xF1,0x50,0x8B,0x4E,0x04 };
 
     // Anchored to the FUNCTION, not per-site
     const uint8_t d_a[] = { 0x81,0xEC,0x00,0x01,0x00,0x00,0x56,0x8B,0xF1,0x8A,0x4E,0x54 };
@@ -53,7 +50,7 @@ namespace
     // Index into k_sigs / g_res.
     enum SigIdx {
         SI_CTOR = 0, SI_DTOR, SI_LOAD, SI_SAVE, SI_APPEND, SI_RESOLVE, SI_RECOUNT,
-        SI_FREEBLOB, SI_STOREADD, SI_DIV_A, SI_DIV_B, SI_DIV_C, SI_DIV_D, SI_CHATMGR
+        SI_FREEBLOB, SI_DIV_A, SI_DIV_B, SI_DIV_C, SI_DIV_D, SI_CHATMGR
     };
 
     const Sig k_sigs[] = {
@@ -65,7 +62,6 @@ namespace
       { "page_resolve", s_resolve, "xxxxxxxxxx",           sizeof(s_resolve), K_SPLICE,  0x18E4B0,  6, -1, NOFF },
       { "page_recount", s_recount, "xxxxxxxxxx",           sizeof(s_recount), K_SPLICE,  0x18E530,  8, -1, NOFF },
       { "page_freeblob",s_freeblob,"xxxxxxxxxxxx",         sizeof(s_freeblob),K_SPLICE,  0x18E4F0,  6, -1, NOFF },
-      { "store_append", s_mtadd,   "xxxxxxxxxxx",          sizeof(s_mtadd),   K_SPLICE,  0x18EC10,  8, -1, NOFF },
 
       { "div_a",        d_a,       "xxxxxxxxxxxx",         sizeof(d_a),       K_DIVISOR, 0x18E760,  0, -1, { 0x0C6u, 0xFFFFFFFFu } },
       { "div_b",        d_b,       "xxxxxxxxxx",           sizeof(d_b),       K_DIVISOR, 0x18EAA0,  0, -1, { 0x017u, 0xFFFFFFFFu } },
@@ -147,7 +143,7 @@ namespace
 
     struct Addrs
     {
-        uintptr_t ctor, dtor, load, save, append, resolve, recount;   // spliced
+        uintptr_t ctor, dtor, load, save, append, resolve, recount;    // spliced
         uintptr_t freeblob;                                            // called
         uintptr_t isbusy, getsize, read, writed, opnew, opfree;        // called
         uintptr_t fmgr;                                                // file-manager global slot
@@ -163,21 +159,24 @@ namespace
     enum { MGR_STRIDE = 0x64068, ST_ITER = 0x64044,
            IT_LIVE = 0x04, IT_TOTAL = 0x08, IT_CONT = 0x0C,
            CT_PAGES = 0x54, CT_OVERFLOW = 0x58, CT_ARRAY = 0x04 };
-    enum { CH_MAX_N = 200, CH_SHADOWS = 64, CH_BLOB_MAX = 0x7F00, CH_MAX_PAGES = 20 };
+    enum { CH_MAX_N = 200, CH_SHADOWS = 64, CH_BLOB_MAX = 0x20000, CH_MAX_PAGES = 20 };
+    const uint32_t CH_DEAD = 0xFFFFFFFFu;   // shadow sentinel for a dead slot
 
-    struct ChShadow { uintptr_t page; uint16_t n; uint16_t off[CH_MAX_N]; };
+    struct ChShadow { uintptr_t page; uint16_t n; uint32_t size; uint32_t off[CH_MAX_N]; };
     ChShadow  g_chSh[CH_SHADOWS];
-    const int CH_DEFAULT_N = 140;   // the size the plugin arms itself at; not selectable
-    int       g_chN  = 50;      // records per page currently in force
-    int       g_chDropped = 0;  // records the last teardown could not hand back (reported, not hidden)
+    const int CH_DEFAULT_N = 140;
+    int       g_chN  = 50;
+    int       g_chDropped = 0;
     bool      g_chOn = false;
-    void*     g_chTramp[7] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-    uint8_t   g_chOrig[7][16];
-    bool      g_chInst[7] = { false, false, false, false, false, false, false };
+    void*     g_chTramp[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+    uint8_t   g_chOrig[8][16];
+    bool      g_chInst[8] = { false, false, false, false, false, false, false, false };
     uint32_t  g_chDivOrig[6];
-    // 0 ctor, 1 dtor, 2 load, 3 save, 4 append, 5 resolve, 6 recount.
-    volatile uint32_t g_chHit[7];
-    volatile uint32_t g_chFail[7];
+    // 0 ctor, 1 dtor, 2 load, 3 save, 4 append, 5 resolve, 6 recount, 7 freeblob.
+    static_assert(sizeof(g_chTramp) / sizeof(g_chTramp[0]) == 8, "splice arrays must agree");
+    static_assert(sizeof(g_chInst)  / sizeof(g_chInst[0])  == 8, "splice arrays must agree");
+    volatile uint32_t g_chHit[8];
+    volatile uint32_t g_chFail[8];
 
     inline uint8_t  ch_r8 (uintptr_t a) { return *reinterpret_cast<volatile uint8_t*>(a); }
     inline uint16_t ch_r16(uintptr_t a) { return *reinterpret_cast<volatile uint16_t*>(a); }
@@ -192,6 +191,12 @@ namespace
         __try { *out = *reinterpret_cast<volatile uint32_t*>(a); return true; }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
     }
+    bool safe_r16(uintptr_t a, uint16_t* out)
+    {
+        if (a < 0x10000) return false;
+        __try { *out = *reinterpret_cast<volatile uint16_t*>(a); return true; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
     bool safe_r8(uintptr_t a, uint8_t* out)
     {
         if (a < 0x10000) return false;
@@ -204,6 +209,22 @@ namespace
         for (int i = 0; i < CH_SHADOWS; ++i) if (g_chSh[i].page == page) return &g_chSh[i];
         return nullptr;
     }
+    uint32_t ch_size(uintptr_t page, const ChShadow* s)
+    {
+        const uintptr_t data = ch_r32(page + PGF_DATA);
+        const uint32_t  cap  = ch_r32(page + PGF_CAP);
+        if (data < 0x10000 || cap == 0) return 0;
+        const uint32_t v = (s != nullptr) ? s->size
+                                          : static_cast<uint32_t>(ch_r16(page + PGF_SIZE));
+        return (v > cap) ? cap : v;
+    }
+    void ch_setsize(uintptr_t page, ChShadow* s, uint32_t v)
+    {
+        if (s != nullptr) s->size = v;
+        ch_w16(page + PGF_SIZE, static_cast<uint16_t>(v > 0xFFFFu ? 0xFFFFu : v));
+    }
+
+
     ChShadow* ch_alloc(uintptr_t page)
     {
         ChShadow* s = ch_find(page);
@@ -212,15 +233,38 @@ namespace
             if (g_chSh[i].page == 0)
             {
                 g_chSh[i].page = page;
-                g_chSh[i].n = static_cast<uint16_t>(g_chN);
-                for (int k = 0; k < CH_MAX_N; ++k) g_chSh[i].off[k] = 0xFFFF;
+                g_chSh[i].n    = static_cast<uint16_t>(g_chN);
+                g_chSh[i].size = 0;
+                for (int k = 0; k < CH_MAX_N; ++k) g_chSh[i].off[k] = CH_DEAD;
                 return &g_chSh[i];
             }
         return nullptr;
     }
 
-    // The blobs are allocated and freed by ENGINE code, so we must use the engine's allocator.
-    // __fastcall with a dummy edx is how MSVC spells __thiscall for a function pointer.
+    ChShadow* ch_rebuild(uintptr_t page)
+    {
+        ChShadow* s = ch_alloc(page);
+        if (s == nullptr) return nullptr;
+        const uintptr_t data = ch_r32(page + PGF_DATA);
+        const uint32_t  cap = ch_r32(page + PGF_CAP);
+        const int       cnt = static_cast<int>(ch_r8(page + PGF_COUNT));
+        s->n = static_cast<uint16_t>(g_chN);
+        for (int k = 0; k < CH_MAX_N; ++k) s->off[k] = CH_DEAD;
+        s->size = 0;
+        if (data < 0x10000 || cap == 0) return s;
+        uint32_t off = 0;
+        int i = 0;
+        while (off < cap && i < cnt && i < CH_MAX_N)
+        {
+            s->off[i++] = off;
+            uint32_t len = 0;
+            while (off + len < cap && ch_r8(data + off + len) != 0) ++len;
+            off += len + 1;
+        }
+        s->size = off;
+        return s;
+    }
+
     typedef void* (__cdecl*   fn_new)(size_t);
     typedef void  (__cdecl*   fn_del)(void*);
     typedef char  (__fastcall* fn_busy)(void*, void*, void*);
@@ -235,13 +279,25 @@ namespace
 
     // -- the seven replacements -------------------------------------------------------------------
 
+    void __fastcall ch_freeblob(void* self, void* edx)
+    {
+        ++g_chHit[7];
+        ChShadow* s = ch_find(reinterpret_cast<uintptr_t>(self));
+        if (s != nullptr)
+        {
+            s->size = 0;
+            for (int k = 0; k < CH_MAX_N; ++k) s->off[k] = CH_DEAD;
+        }
+        reinterpret_cast<void(__fastcall*)(void*, void*)>(g_chTramp[7])(self, edx);
+    }
+
     void __fastcall ch_recount(void* self, void*)
     {
         ++g_chHit[6];
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         ChShadow* s = ch_find(page);
         const uintptr_t data = ch_r32(page + PGF_DATA);
-        const int size = static_cast<int>(ch_r16(page + PGF_SIZE));
+        const int size = static_cast<int>(ch_size(page, s));
         int cnt = 0;
         if (s == nullptr)   // no shadow -> revalidate the NATIVE table exactly as the engine would
         {
@@ -255,14 +311,12 @@ namespace
             ch_w8(page + PGF_COUNT, static_cast<uint8_t>(cnt));
             return;
         }
-        // The engine's own liveness rule: an offset is live iff it is in range and points just past
-        // a NUL. Keep this, the native function and chatpage.py in lockstep.
         for (int i = 0; i < s->n; ++i)
         {
-            const int off = static_cast<int16_t>(s->off[i]);
-            const bool ok = (off >= 0) && (off < size) &&
-                            (off == 0 || (data >= 0x10000 && ch_r8(data + off - 1) == 0));
-            if (!ok) s->off[i] = 0xFFFF; else ++cnt;
+            const uint32_t o = s->off[i];
+            const bool ok = (o != CH_DEAD) && (o < static_cast<uint32_t>(size)) &&
+                            (o == 0 || (data >= 0x10000 && ch_r8(data + o - 1) == 0));
+            if (!ok) s->off[i] = CH_DEAD; else ++cnt;
         }
         ch_w8(page + PGF_COUNT, static_cast<uint8_t>(cnt > 255 ? 255 : cnt));
     }
@@ -273,17 +327,10 @@ namespace
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         const ChShadow* s = ch_find(page);
         if (idx < 0 || idx >= static_cast<int>(ch_r8(page + PGF_COUNT))) return nullptr;
-        if (s == nullptr)
-        {
-            if (idx >= 50) return nullptr;
-            const int noff = static_cast<int16_t>(ch_r16(page + idx * 2));
-            if (noff < 0 || noff >= static_cast<int>(ch_r16(page + PGF_SIZE))) { ++g_chFail[5]; return nullptr; }
-            const uintptr_t nd = ch_r32(page + PGF_DATA);
-            if (nd < 0x10000) { ++g_chFail[5]; return nullptr; }
-            return reinterpret_cast<char*>(nd + noff);
-        }
-        const int off = static_cast<int16_t>(s->off[idx]);
-        if (off < 0 || off >= static_cast<int>(ch_r16(page + PGF_SIZE))) { ++g_chFail[5]; return nullptr; }
+        if (s == nullptr) s = ch_rebuild(page);
+        if (s == nullptr) { ++g_chFail[5]; return nullptr; }
+        const uint32_t off = s->off[idx];
+        if (off == CH_DEAD || off >= ch_size(page, s)) { ++g_chFail[5]; return nullptr; }
         const uintptr_t data = ch_r32(page + PGF_DATA);
         if (data < 0x10000) { ++g_chFail[5]; return nullptr; }
         return reinterpret_cast<char*>(data + off);
@@ -295,13 +342,13 @@ namespace
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         if (txt == nullptr) return 1;
         ChShadow* s = ch_find(page);
-        if (s == nullptr) s = ch_alloc(page);
+        if (s == nullptr) s = ch_rebuild(page);
         if (s == nullptr) { ++g_chFail[4]; return -1; }
 
         const int len = static_cast<int>(strlen(txt));
         const int cnt = static_cast<int>(ch_r8(page + PGF_COUNT));
         if (cnt >= s->n) return -1;
-        const int size = static_cast<int>(ch_r16(page + PGF_SIZE));
+        const int size = static_cast<int>(ch_size(page, s));
 
         const int remaining_after = static_cast<int>(s->n) - cnt - 1;
         int wlen = len;
@@ -327,29 +374,35 @@ namespace
         }
         if (wlen > 0) memcpy(reinterpret_cast<void*>(data + size), txt, static_cast<size_t>(wlen));
         *reinterpret_cast<volatile char*>(data + size + wlen) = 0;
-        s->off[cnt] = static_cast<uint16_t>(size);
-        ch_w16(page + PGF_SIZE, static_cast<uint16_t>(size + wlen + 1));
+        s->off[cnt] = static_cast<uint32_t>(size);
+        ch_setsize(page, s, static_cast<uint32_t>(size + wlen + 1));
         ch_w8(page + PGF_COUNT, static_cast<uint8_t>(cnt + 1));
         return 1;
     }
 
+    // Candidates: this build's 4-byte header, an older build's 2-byte header, and the stock 100.
     int ch_best_hdr(const uint8_t* buf, int fsz, int n)
     {
-        const int cands[2] = { 2 * n, 100 };
+        const int cands[3] = { 4 * n, 2 * n, 100 };
         int bestH = -1, bestCnt = -1;
-        for (int c = 0; c < 2; ++c)
+        for (int c = 0; c < 3; ++c)
         {
             const int H = cands[c];
             if (H <= 0 || fsz < H) continue;
-            if (c == 1 && cands[0] == cands[1]) continue;
-            const int dsz = fsz - H;
+            bool dup = false;
+            for (int d = 0; d < c; ++d) if (cands[d] == H) dup = true;
+            if (dup) continue;
+            const int esz  = (c == 0) ? 4 : 2;
+            const int dsz  = fsz - H;
             const uint8_t* data = buf + H;
             int cnt = 0;
-            for (int i = 0; i < H / 2 && i < CH_MAX_N; ++i)
+            for (int i = 0; i < H / esz && i < CH_MAX_N; ++i)
             {
-                const int off = static_cast<int16_t>(
-                    static_cast<uint16_t>(buf[i * 2] | (buf[i * 2 + 1] << 8)));
-                if (off < 0 || off >= dsz) continue;
+                uint32_t off;
+                if (esz == 4) memcpy(&off, buf + i * 4, 4);
+                else          off = static_cast<uint16_t>(buf[i * 2] | (buf[i * 2 + 1] << 8));
+                if (off == CH_DEAD || off == 0xFFFFu) continue;
+                if (off >= static_cast<uint32_t>(dsz)) continue;
                 if (off > 0 && data[off - 1] != 0) continue;
                 ++cnt;
             }
@@ -390,14 +443,26 @@ namespace
         void* blob = ch_new(static_cast<size_t>(dsz > 0 ? dsz : 1));
         if (blob == nullptr) { ch_del(buf); return -1; }
         if (dsz > 0) memcpy(blob, static_cast<const char*>(buf) + hdr, static_cast<size_t>(dsz));
-        const int nEnt = (hdr / 2 > CH_MAX_N) ? CH_MAX_N : hdr / 2;
-        memcpy(s->off, buf, static_cast<size_t>(nEnt * 2));
-        for (int i = nEnt; i < CH_MAX_N; ++i) s->off[i] = 0xFFFF;
+        const int esz  = (hdr == 2 * s->n || hdr == 100) ? 2 : 4;
+        const int nEnt = (hdr / esz > CH_MAX_N) ? CH_MAX_N : hdr / esz;
+        const uint8_t* hb = static_cast<const uint8_t*>(buf);
+        for (int i = 0; i < nEnt; ++i)
+        {
+            uint32_t v;
+            if (esz == 2)
+            {
+                const uint16_t w16 = static_cast<uint16_t>(hb[i * 2] | (hb[i * 2 + 1] << 8));
+                v = (w16 == 0xFFFFu) ? CH_DEAD : w16;
+            }
+            else memcpy(&v, hb + i * 4, 4);
+            s->off[i] = v;
+        }
+        for (int i = nEnt; i < CH_MAX_N; ++i) s->off[i] = CH_DEAD;
         ch_del(buf);
 
         ch_w32(page + PGF_DATA, reinterpret_cast<uint32_t>(blob));
         ch_w32(page + PGF_CAP, static_cast<uint32_t>(dsz));
-        ch_w16(page + PGF_SIZE, static_cast<uint16_t>(dsz));
+        ch_setsize(page, s, static_cast<uint32_t>(dsz));
         ch_recount(self, nullptr);
         return 1;
     }
@@ -418,10 +483,10 @@ namespace
         }
         // the engine's own direct-write branch: header then blob, no private copy
         const fn_writ w = reinterpret_cast<fn_writ>(g_a.writed);
-        w(mgr, nullptr, file, s->off, 2 * s->n, 0);
+        w(mgr, nullptr, file, s->off, 4 * s->n, 0);
         const uintptr_t data = ch_r32(page + PGF_DATA);
         if (data >= 0x10000) w(mgr, nullptr, file, reinterpret_cast<const void*>(data),
-                               static_cast<int>(ch_r16(page + PGF_SIZE)), 1);
+                               static_cast<int>(ch_size(page, s)), 1);
         return 1;
     }
 
@@ -522,22 +587,70 @@ namespace
             {
                 ChShadow* s = ch_alloc(page);
                 if (s == nullptr) continue;
-                for (int k = 0; k < 50; ++k) s->off[k] = ch_r16(page + k * 2);
-                for (int k = 50; k < CH_MAX_N; ++k) s->off[k] = 0xFFFF;
+                for (int k = 0; k < 50; ++k)
+                {
+                    const uint16_t w16 = ch_r16(page + k * 2);
+                    s->off[k] = (w16 == 0xFFFFu) ? CH_DEAD : w16;
+                }
+                for (int k = 50; k < CH_MAX_N; ++k) s->off[k] = CH_DEAD;
                 s->n = static_cast<uint16_t>(g_chN);
+                s->size = static_cast<uint32_t>(ch_r16(page + PGF_SIZE));
             }
             else
             {
-                const ChShadow* s = ch_find(page);
+                ChShadow* s = ch_find(page);
                 if (s == nullptr) continue;
-                // Keep the newest 50
                 int live = static_cast<int>(ch_r8(page + PGF_COUNT));
                 if (live > CH_MAX_N) live = CH_MAX_N;
-                const int first = (live > 50) ? (live - 50) : 0;   // index of the oldest kept record
+                const int first = (live > 50) ? (live - 50) : 0;
                 const int keep  = (live > 50) ? 50 : live;
-                for (int k = 0; k < keep; ++k) ch_w16(page + k * 2, s->off[first + k]);
-                for (int k = keep; k < 50; ++k) ch_w16(page + k * 2, 0xFFFF);   // unused slots empty
-                if (live > 50) ch_w8(page + PGF_COUNT, 50);   // native tables hold 50
+                const uintptr_t data = ch_r32(page + PGF_DATA);
+                const uint32_t  osz  = ch_size(page, s);
+
+                uint32_t nsz = 0;
+                if (data >= 0x10000)
+                {
+                    for (int k = 0; k < keep; ++k)
+                    {
+                        const uint32_t o = s->off[first + k];
+                        if (o == CH_DEAD || o >= osz) { ++nsz; continue; }
+                        uint32_t len = 0;
+                        while (o + len < osz && ch_r8(data + o + len) != 0) ++len;
+                        nsz += len + 1;
+                    }
+                }
+                void* nb = (nsz > 0) ? ch_new(nsz) : nullptr;
+                if (nb != nullptr && data >= 0x10000)
+                {
+                    uint8_t* w = static_cast<uint8_t*>(nb);
+                    uint32_t at = 0;
+                    uint32_t newoff[50] = { 0 };
+                    for (int k = 0; k < keep; ++k)
+                    {
+                        const uint32_t o = s->off[first + k];
+                        newoff[k] = at;
+                        ch_w16(page + k * 2, static_cast<uint16_t>(at));
+                        if (o == CH_DEAD || o >= osz) { w[at++] = 0; continue; }
+                        uint32_t len = 0;
+                        while (o + len < osz && ch_r8(data + o + len) != 0) ++len;
+                        for (uint32_t j = 0; j < len; ++j) w[at + j] = ch_r8(data + o + j);
+                        w[at + len] = 0;
+                        at += len + 1;
+                    }
+                    reinterpret_cast<fn_fblob>(g_a.freeblob)(reinterpret_cast<void*>(page), nullptr);
+                    ch_w32(page + PGF_DATA, reinterpret_cast<uint32_t>(nb));
+                    ch_w32(page + PGF_CAP, nsz);
+                    ch_w16(page + PGF_SIZE, static_cast<uint16_t>(nsz > 0xFFFFu ? 0xFFFFu : nsz));
+                    s->size = nsz;
+                    for (int k = 0; k < keep; ++k)        s->off[k] = newoff[k];
+                    for (int k = keep; k < CH_MAX_N; ++k) s->off[k] = CH_DEAD;
+                }
+                else
+                {
+                    for (int k = 0; k < keep; ++k) ch_w16(page + k * 2, 0xFFFF);
+                }
+                for (int k = keep; k < 50; ++k) ch_w16(page + k * 2, 0xFFFF);
+                ch_w8(page + PGF_COUNT, static_cast<uint8_t>(keep));
                 g_chDropped += (live > 50) ? (live - 50) : 0;
             }
             ++touched;
@@ -718,7 +831,7 @@ bool chathistoryplus::Derive(void)
         { &g_a.opfree,   save, 0x0E2, "free"     },
         { &g_a.writed,   save, 0x186, "write"    },
     };
-    for (int i = 0; i < 7; ++i)
+    for (size_t i = 0; i < sizeof(cs) / sizeof(cs[0]); ++i)
     {
         const uintptr_t site = cs[i].from + cs[i].off;
         if (*reinterpret_cast<const uint8_t*>(site) != 0xE8)
@@ -881,8 +994,10 @@ void chathistoryplus::Status(void)
             Print(k_colInfo, "The two differ because your chat windows are filtered differently.");
     }
     if (ns < 2)
+    {
         Log(true, "only %d of 2 stores reachable; refusing - the size constant is shared code", ns);
         Print(k_colWarn, "Only one chat window's store is reachable, so nothing was changed.");
+    }
 }
 
 // Read-only topology dump
@@ -917,9 +1032,26 @@ void chathistoryplus::Probe(void)
         const bool d = b && safe_r8(ct + CT_PAGES, &pages) && safe_r32(ct + CT_OVERFLOW, &ovf);
         const bool e = a && safe_r32(it + IT_LIVE, &live) &&
                        (live < 0x10000 || safe_r8(live + PGF_COUNT, &lcnt));
+        // Blob bytes, not just record count
+        uint16_t lsz = 0; uint32_t lcap = 0;
+        // The TRUE size lives in the shadow
+        uint32_t ltrue = 0;
+        if (e && live >= 0x10000)
+        {
+            safe_r16(live + PGF_SIZE, &lsz);
+            safe_r32(live + PGF_CAP, &lcap);
+            uint32_t d = 0;
+            if (safe_r32(live + PGF_DATA, &d) && d >= 0x10000 && lcap > 0)
+            {
+                const ChShadow* sh = ch_find(live);
+                ltrue = (sh != nullptr) ? ((sh->size > lcap) ? lcap : sh->size) : lsz;
+            }
+        }
         Log(false, "  mgr%d +0x%05X iter 0x%08X cont 0x%08X vtbl 0x%08X pages %u overflow %u "
-                   "live 0x%08X count %u%s",
+                   "live 0x%08X count %u  blob %u/%u bytes (%u%% of ceiling, cap %u)%s",
             c + 1, off, it, ct, vt, pages, ovf, live, lcnt,
+            ltrue, static_cast<unsigned>(CH_BLOB_MAX),
+            static_cast<unsigned>(ltrue * 100u / CH_BLOB_MAX), lcap,
             (a && b && d && e) ? "" : "   <- did not validate");
         if (d)
             for (int i = 0; i < pages; ++i)
@@ -937,14 +1069,19 @@ void chathistoryplus::Probe(void)
             safe_r32(live + PGF_COUNT, &cnt);
             safe_r32(live + PGF_DATA, &dat);
             safe_r32(live + PGF_CAP, &cap);
-            safe_r32(live + PGF_SIZE, &siz);
-            Log(false, "    live page: count %u data 0x%08X cap %u size %u",
-                cnt & 0xFF, dat, cap, siz & 0xFFFF);
+            uint16_t s16 = 0;
+            safe_r16(live + PGF_SIZE, &s16);
+            const ChShadow* sh2 = ch_find(live);
+            siz = (sh2 != nullptr && dat >= 0x10000 && cap > 0)
+                    ? ((sh2->size > cap) ? cap : sh2->size) : s16;
+            Log(false, "    live page: count %u data 0x%08X cap %u size %u (true)",
+                cnt & 0xFF, dat, cap, siz);
             DumpWords("    live off[]", live, 6);
         }
     }
-    for (int i = 0; i < 7; ++i)
-        Log(false, "  detour %d hits %u fails %u", i, g_chHit[i], g_chFail[i]);
+    for (size_t i = 0; i < sizeof(g_chHit) / sizeof(g_chHit[0]); ++i)
+        Log(false, "  detour %u hits %u fails %u",
+            static_cast<unsigned>(i), g_chHit[i], g_chFail[i]);
 }
 
 bool chathistoryplus::Enable(void)
@@ -993,7 +1130,7 @@ bool chathistoryplus::Enable(void)
     }
 
     struct Site { uintptr_t addr; int steal; void* det; };
-    const Site sites[7] = {
+    const Site sites[8] = {
         { g_a.ctor,    k_sigs[SI_CTOR].steal,    reinterpret_cast<void*>(&ch_ctor)    },
         { g_a.dtor,    k_sigs[SI_DTOR].steal,    reinterpret_cast<void*>(&ch_dtor)    },
         { g_a.load,    k_sigs[SI_LOAD].steal,    reinterpret_cast<void*>(&ch_load)    },
@@ -1001,6 +1138,7 @@ bool chathistoryplus::Enable(void)
         { g_a.append,  k_sigs[SI_APPEND].steal,  reinterpret_cast<void*>(&ch_append)  },
         { g_a.resolve, k_sigs[SI_RESOLVE].steal, reinterpret_cast<void*>(&ch_resolve) },
         { g_a.recount, k_sigs[SI_RECOUNT].steal, reinterpret_cast<void*>(&ch_recount) },
+        { g_a.freeblob, k_sigs[SI_FREEBLOB].steal, reinterpret_cast<void*>(&ch_freeblob) },
     };
 
     g_chN = n;
@@ -1011,12 +1149,12 @@ bool chathistoryplus::Enable(void)
     int adopted = 0;   // adopt before splicing
     for (int i = 0; i < ns; ++i) adopted += ch_adopt(st[i], true);
 
-    for (int i = 0; i < 7; ++i)
+    for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
         if (!splice(sites[i].addr, sites[i].steal, sites[i].det,
                     &g_chTramp[i], g_chOrig[i], &g_chInst[i]))
         {
             Refuse("splice %d failed - rolling back", i + 1);
-            for (int j = 0; j < 7; ++j)
+            for (size_t j = 0; j < sizeof(sites) / sizeof(sites[0]); ++j)
                 unsplice(sites[j].addr, sites[j].steal, sites[j].det,
                          &g_chTramp[j], g_chOrig[j], &g_chInst[j]);
             for (int j = 0; j < ns; ++j) ch_adopt(st[j], false);
@@ -1068,7 +1206,7 @@ bool chathistoryplus::Disable(void)
         }
 
     struct Site { uintptr_t addr; int steal; void* det; };
-    const Site sites[7] = {
+    const Site sites[8] = {
         { g_a.ctor,    k_sigs[SI_CTOR].steal,    reinterpret_cast<void*>(&ch_ctor)    },
         { g_a.dtor,    k_sigs[SI_DTOR].steal,    reinterpret_cast<void*>(&ch_dtor)    },
         { g_a.load,    k_sigs[SI_LOAD].steal,    reinterpret_cast<void*>(&ch_load)    },
@@ -1076,8 +1214,9 @@ bool chathistoryplus::Disable(void)
         { g_a.append,  k_sigs[SI_APPEND].steal,  reinterpret_cast<void*>(&ch_append)  },
         { g_a.resolve, k_sigs[SI_RESOLVE].steal, reinterpret_cast<void*>(&ch_resolve) },
         { g_a.recount, k_sigs[SI_RECOUNT].steal, reinterpret_cast<void*>(&ch_recount) },
+        { g_a.freeblob, k_sigs[SI_FREEBLOB].steal, reinterpret_cast<void*>(&ch_freeblob) },
     };
-    for (int i = 0; i < 7; ++i)
+    for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
         unsplice(sites[i].addr, sites[i].steal, sites[i].det,
                  &g_chTramp[i], g_chOrig[i], &g_chInst[i]);
     for (int i = 0; i < 6; ++i) poke32(g_a.div[i], g_chDivOrig[i]);
@@ -1163,8 +1302,13 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
         Report(true);
         Probe();
         if (g_chOn)
-            Log(false, "(7 of the 14 signatures sit under this plugin's own patches while enabled, "
-                       "so they are reported from the cached scan rather than re-read)");
+        {
+            unsigned spl = 0;
+            for (size_t i = 0; i < k_sigN; ++i) if (k_sigs[i].kind == K_SPLICE) ++spl;
+            Log(false, "(%u of the %u signatures sit under this plugin's own patches while enabled, "
+                       "so they are reported from the cached scan rather than re-read)",
+                spl, static_cast<unsigned>(k_sigN));
+        }
         if (toFile)
         {
             DiagClose();

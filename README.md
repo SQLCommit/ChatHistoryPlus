@@ -1,4 +1,4 @@
-# ChatHistoryPlus v1.0 - A Bigger Native Chat Log for Ashita v4
+# ChatHistoryPlus v1.1 - A Bigger Native Chat Log for Ashita v4
 
 Raises how much chat FFXI keeps, from 1000 messages per window to **2800**.
 
@@ -40,7 +40,7 @@ Copy `chathistoryplus.dll` into `Ashita-v4beta-main\plugins\`, then:
 | `/chathistoryplus status` | Whether it is on, and how much history is held |
 | `/chathistoryplus diag` | Full report to `logs\chathistoryplus_diag.log` |
 
-`/chp` is a short.
+`/chp` for short.
 
 ## Why it only switches at login
 
@@ -99,10 +99,16 @@ So after the constants, the client can count to 140 and has nowhere to put entri
 
 ### What the plugin holds
 
-A **shadow table** per live page: the same kind of offsets, just 140 of them instead of 50. It
-detours the seven client functions that touch the index - the page constructor and destructor,
-append, resolve (the read path), recount, and the two that load and save page files - so the client
-behaves as though its array were larger. No message text is copied anywhere.
+A **shadow table** per live page: the same kind of offsets, just 140 of them instead of 50, and held
+as 32-bit values. It detours the eight client functions that touch the index or the text buffer - the
+page constructor and destructor, append, resolve (the read path), recount, the two that load and save
+page files, and the one that frees the buffer - so the client behaves as though its array were larger.
+No message text is copied anywhere.
+
+The text buffer has the same problem. The client tracks its size in a **signed 16-bit** field, so it
+breaks past 32,767 bytes - and a single record can reach 2,047, because colour codes cost bytes but no
+screen width. So the shadow carries the true size too, and the ceiling is raised to 128 KB. Without it a page fills before it holds 140 records and the rest
+store empty - blank lines, and scrollback that stops dead.
 
 Closed pages go to disk with a wider header, and the loader detects the header size when reading one
 back, so a file written at 50 and a file written at 140 are both readable.
