@@ -737,23 +737,71 @@ void chathistoryplus::Log(bool warn, const char* fmt, ...)
                 "ChatHistoryPlus", "%s", buf);
 }
 
-bool chathistoryplus::DiagOpen(char* pathOut, size_t n)
+bool chathistoryplus::BuildDiagLogPath(char* pathOut, size_t n) const
 {
-    if (m_Core == nullptr) return false;
+    if (m_Core == nullptr || pathOut == nullptr || n == 0)
+        return false;
+
     const char* inst = m_Core->GetInstallPath();
-    if (inst == nullptr || inst[0] == '\0') return false;
+    if (inst == nullptr || inst[0] == '\0')
+        return false;
 
     const size_t len = strlen(inst);
-    const char* sep  = (len > 0 && (inst[len - 1] == '\\' || inst[len - 1] == '/')) ? "" : "\\";
-    _snprintf_s(pathOut, n, _TRUNCATE, "%s%slogs\\chathistoryplus_diag.log", inst, sep);
+    const char* sep =
+        (len > 0 && (inst[len - 1] == '\\' || inst[len - 1] == '/'))
+        ? ""
+        : "\\";
 
-    if (fopen_s(&m_DiagFp, pathOut, "a") != 0 || m_DiagFp == nullptr) { m_DiagFp = nullptr; return false; }
+    const DWORD pid = GetCurrentProcessId();
+
+    uint16_t myIndex = m_Core->GetMemoryManager()->GetParty()->GetMemberTargetIndex(0);
+    if (myIndex < 1)
+        return false;
+    if (m_Core->GetMemoryManager()->GetEntity()->GetRawEntity(myIndex) == 0)
+        return false;
+    if ((m_Core->GetMemoryManager()->GetEntity()->GetRenderFlags0(myIndex) & 0x200) == 0)
+        return false;
+    if ((m_Core->GetMemoryManager()->GetEntity()->GetRenderFlags0(myIndex) & 0x4000) != 0)
+        return false;
+
+    const char* myName =
+        m_Core->GetMemoryManager()->GetEntity()->GetName(myIndex);
+
+    if (myName == nullptr || myName[0] == '\0')
+        return false;
+
+    const int result = _snprintf_s(
+        pathOut,
+        n,
+        _TRUNCATE,
+        "%s%slogs\\chathistoryplus_diag_%s_%lu.log",
+        inst,
+        sep,
+        myName,
+        pid);
+
+    return result >= 0;
+}
+
+bool chathistoryplus::DiagOpen(char* pathOut, size_t n)
+{
+    if (!BuildDiagLogPath(pathOut, n))
+        return false;
+
+    if (fopen_s(&m_DiagFp, pathOut, "a") != 0 || m_DiagFp == nullptr)
+    {
+        m_DiagFp = nullptr;
+        return false;
+    }
 
     char stamp[64] = "unknown time";
     __time64_t t = _time64(nullptr);
     struct tm lt;
-    if (_localtime64_s(&lt, &t) == 0) strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &lt);
-    fprintf(m_DiagFp, "\n===== ChatHistoryPlus diag  %s =====\n", stamp);
+
+    if (_localtime64_s(&lt, &t) == 0)
+        strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &lt);
+
+    fprintf(m_DiagFp, "\n===== ChatHistoryPlus diag (PID:%lu)  %s =====\n", GetCurrentProcessId(), stamp);
     return true;
 }
 
@@ -1312,10 +1360,13 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
         if (toFile)
         {
             DiagClose();
-            Print(k_colInfo, "Diagnostics written to " HL("logs\\chathistoryplus_diag.log")
-                             " in your Ashita folder.");
+            Print(k_colInfo, "Diagnostics written to " HL("%s") ".", path);
         }
-        else Print(k_colWarn, "Could not open the diagnostic file - written to the Ashita log instead.");
+        else
+        {
+            Print(k_colWarn,
+                "Could not open the diagnostic file - written to the Ashita log instead.");
+        }
     }
     else if (_stricmp(a, "status") == 0) { Status(); if (args.size() <= 1) Usage(false); }
     else Usage(true);
@@ -1327,16 +1378,18 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
 // ------------------------------------------------------------------------------------------------
 extern "C"
 {
-    __declspec(noinline) IPlugin* __stdcall expCreatePlugin(const char* args)
+    auto __stdcall expCreatePlugin(const char* args) -> IPlugin*
     {
         UNREFERENCED_PARAMETER(args);
         return new chathistoryplus();
     }
-    __declspec(noinline) void __stdcall expDestroyPlugin(void* instance)
+
+    auto __stdcall expDestroyPlugin(void* instance) -> void
     {
-        if (instance != nullptr) delete static_cast<chathistoryplus*>(instance);
+        delete static_cast<chathistoryplus*>(instance);
     }
-    __declspec(noinline) double __stdcall expGetInterfaceVersion(void)
+
+    auto __stdcall expGetInterfaceVersion(void) -> double
     {
         return ASHITA_INTERFACE_VERSION;
     }

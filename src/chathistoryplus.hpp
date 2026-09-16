@@ -63,6 +63,7 @@ class chathistoryplus final : public IPlugin
     int  Stores(Store* out, int max);
     void Print(uint8_t colour, const char* fmt, ...);
     FILE* m_DiagFp = nullptr;
+    bool BuildDiagLogPath(char* pathOut, size_t n) const;
     bool  DiagOpen(char* pathOut, size_t n);
     void  DiagClose(void);
 
@@ -86,7 +87,7 @@ public:
     const char* GetAuthor(void) const override { return "SQLCommit"; }
     const char* GetDescription(void) const override { return "Raises how much chat history FFXI keeps."; }
     const char* GetLink(void) const override { return ""; }
-    double GetVersion(void) const override { return 1.1; }
+    double GetVersion(void) const override { return 1.2; }
     double GetInterfaceVersion(void) const override { return ASHITA_INTERFACE_VERSION; }
     int32_t GetPriority(void) const override { return 0; }
     uint32_t GetFlags(void) const override
