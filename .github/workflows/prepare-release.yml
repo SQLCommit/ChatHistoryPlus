@@ -113,7 +113,9 @@ jobs:
           $dll = Invoke-PluginBuild $cfg -Sdk .ashita/plugins/sdk -Interface $cfg.ashitaInterface
           $info = Get-BuildInfo -Version $version -Interface $cfg.ashitaInterface -SdkRef $cfg.ashitaSdkRef
           $zip = New-ReleasePackage $cfg -Dll $dll -Version $version -Interface $cfg.ashitaInterface -BuildInfo $info -OutDir $env:OUT
-          Get-DownloadNotes $cfg -ZipName $zip -Interface $cfg.ashitaInterface -SdkRef $cfg.ashitaSdkRef -OutDir $env:OUT | Set-Content (Join-Path $env:OUT 'downloads.md')
+          $changes = Get-ChangelogLink $cfg -Version $version -Tag $env:TAG
+          if (-not $changes) { Write-Host "::notice::No changelog heading names version $version, so the notes get no What's new link." }
+          Get-DownloadNotes $cfg -ZipName $zip -Interface $cfg.ashitaInterface -SdkRef $cfg.ashitaSdkRef -OutDir $env:OUT -Changelog $changes | Set-Content (Join-Path $env:OUT 'downloads.md')
           Add-Content $env:GITHUB_OUTPUT "zip=$zip"
           Write-Summary "Built $zip from $($info.sourceCommit)."
 

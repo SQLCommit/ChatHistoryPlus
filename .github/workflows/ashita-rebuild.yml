@@ -101,6 +101,7 @@ jobs:
         env:
           INTERFACE: ${{ needs.plan.outputs.interface }}
           SDK_REF: ${{ needs.plan.outputs.sdk-ref }}
+          BASE: ${{ needs.plan.outputs.base }}
           OUT: ${{ runner.temp }}/release-files
         run: |
           # The release's own settings and build script, with the current release tools.
@@ -110,7 +111,8 @@ jobs:
           $dll = Invoke-PluginBuild $cfg -Sdk ../ashita/plugins/sdk -Interface $env:INTERFACE
           $info = Get-BuildInfo -Version $version -Interface $env:INTERFACE -SdkRef $env:SDK_REF
           $zip = New-ReleasePackage $cfg -Dll $dll -Version $version -Interface $env:INTERFACE -BuildInfo $info -OutDir $env:OUT
-          Get-DownloadNotes $cfg -ZipName $zip -Interface $env:INTERFACE -SdkRef $env:SDK_REF -OutDir $env:OUT | Set-Content (Join-Path $env:OUT 'downloads.md')
+          $changes = Get-ChangelogLink $cfg -Version $version -Tag $env:BASE
+          Get-DownloadNotes $cfg -ZipName $zip -Interface $env:INTERFACE -SdkRef $env:SDK_REF -OutDir $env:OUT -Changelog $changes | Set-Content (Join-Path $env:OUT 'downloads.md')
           Add-Content $env:GITHUB_OUTPUT "zip=$zip"
           Add-Content $env:GITHUB_OUTPUT "commit=$($info.sourceCommit)"
           Write-Summary "Built $zip from $($info.sourceCommit) with Ashita SDK $env:SDK_REF."

@@ -1,9 +1,10 @@
 # Virus scan. Run it by hand (Actions > Virus scan > Run workflow) with a release tag, after Prepare release has
 # attached the zip. It downloads the release's zip files, checks them against SHA256SUMS.txt, sends each one to
-# VirusTotal, waits for the result, and adds a "Virus scan" section at the end of the release notes with the count and
-# a link to the full report. It works on a draft or a published release and changes nothing else.
+# VirusTotal, waits for the result, and adds a "Virus scan" line with the count and a link to the full report as the
+# first item under "Verify this download" in the release's footer. It works on a draft or a published release and
+# changes nothing else.
 # Needs a repository secret VT_API_KEY (a free VirusTotal account's API key). Running Prepare release again removes
-# this section, because the zip may have changed; run Virus scan again after it.
+# the line, because the zip may have changed; run Virus scan again after it.
 name: Virus scan
 run-name: Virus scan ${{ inputs.tag }}
 
@@ -37,7 +38,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:VT_API_KEY) { throw 'Add your VirusTotal API key as a repository secret named VT_API_KEY (Settings > Secrets and variables > Actions).' }
-          $marker = '<!-- virus scan: generated below this line -->'
+          $tag = '<!-- virus scan -->'
+          $oldSection = '<!-- virus scan: generated below this line -->'
           $headers = @{ 'x-apikey' = $env:VT_API_KEY }
 
           $info = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json body,assets 2>&1
@@ -56,7 +58,7 @@ jobs:
             foreach ($line in Get-Content -LiteralPath $sumsFile) { if ($line -match '^([0-9a-f]{64})\s+\*?(.+)$') { $sums[$Matches[2].Trim()] = $Matches[1] } }
           }
 
-          $lines = @($marker, '### Virus scan', '')
+          $scan = @()
           foreach ($zip in $zips) {
             $path = Join-Path $dir $zip
             $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -82,19 +84,33 @@ jobs:
             $engines = $flagged + $suspicious + [int]$stats.undetected + [int]$stats.harmless
             $report = "https://www.virustotal.com/gui/file/$sha"
             $when = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
-            $result = if ($flagged -eq 0 -and $suspicious -eq 0) { "0 of $engines antivirus engines flagged it" } else { "$flagged of $engines antivirus engines flagged it as malicious and $suspicious as suspicious" }
-            $lines += "- **$zip**: $result on VirusTotal ([full report]($report)), scanned $when."
+            $result = "$flagged of $engines engines flagged it"
+            if ($suspicious -gt 0) { $result += ", $suspicious more as suspicious" }
+            $label = if ($zips.Count -gt 1) { "Virus scan ($zip):" } else { 'Virus scan:' }
+            $scan += "- $label $result ([VirusTotal report]($report), $when) $tag"
             $summary = "${zip}: $result. Report: $report"
             Write-Host $summary
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
           }
 
-          # Keep everything above an earlier scan's section (your notes and the Downloads section) and replace the scan.
+          # Put the scan line first under "Verify this download" (before the SHA-256 line), replacing an earlier scan
+          # and the old separate section; without that list, under the Download line; without either, at the end.
           $body = "$($release.body)"
-          $at = $body.IndexOf($marker)
+          $at = $body.IndexOf($oldSection)
           if ($at -ge 0) { $body = $body.Substring(0, $at) }
-          $body = $body.TrimEnd()
-          $notes = if ($body) { "$body`n`n$($lines -join "`n")`n" } else { "$($lines -join "`n")`n" }
+          $notesLines = New-Object System.Collections.Generic.List[string]
+          foreach ($line in ($body.TrimEnd() -split "\r?\n")) { if ($line -notmatch [regex]::Escape($tag)) { $notesLines.Add($line) } }
+          # The SHA-256 line may sit inside the Note box ('> - SHA-256:'); the scan line takes the same prefix.
+          $verify = -1
+          $download = -1
+          for ($i = 0; $i -lt $notesLines.Count; $i++) {
+            if ($verify -lt 0 -and $notesLines[$i] -match '^((?:> ?)?)- SHA-256:') { $verify = $i; $prefix = $Matches[1] }
+            if ($download -lt 0 -and $notesLines[$i] -match '^(?:> ?)?(- )?\*\*Download:\*\*') { $download = $i }
+          }
+          if ($verify -ge 0) { $notesLines.InsertRange($verify, [string[]]@($scan | ForEach-Object { "$prefix$_" })) }
+          elseif ($download -ge 0) { $notesLines.InsertRange($download + 1, [string[]]$scan) }
+          else { $notesLines.AddRange([string[]](@('', '---', '') + $scan)) }
+          $notes = (($notesLines -join "`n").Trim()) + "`n"
           $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
           Set-Content -LiteralPath $notesFile -Value $notes
           gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --notes-file $notesFile | Out-Null
