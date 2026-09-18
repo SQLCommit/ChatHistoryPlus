@@ -1,0 +1,17 @@
+{
+  "name": "ChatHistoryPlus",
+  "repository": "SQLCommit/ChatHistoryPlus",
+  "dll": "chathistoryplus.dll",
+  "buildOutput": "build/Release/chathistoryplus.dll",
+  "docsFolder": "chathistoryplus",
+  "docs": [
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "versionFile": "src/chathistoryplus.hpp",
+  "versionPattern": "GetVersion\\s*\\([^)]*\\)[^{]*\\{\\s*return\\s+([0-9]+\\.[0-9]+)",
+  "ashitaSdkRef": "4171c74c8ddb2ca2a31654f199e6c1cee40d7256",
+  "ashitaInterface": "4.30"
+}
