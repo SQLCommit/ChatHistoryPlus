@@ -181,7 +181,9 @@ jobs:
           $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
           Set-Content -LiteralPath $notesFile -Value $notes
           $files = @((Join-Path $env:FILES $env:ZIP), (Join-Path $env:FILES 'SHA256SUMS.txt'))
-          Invoke-Gh (@('release', 'create', $env:TAG, '--repo', $env:GITHUB_REPOSITORY, '--draft', '--target', $env:COMMIT, '--title', $env:TAG, '--notes-file', $notesFile) + $files) | Out-Null
+          # Titled like the owner's releases: "<Name> v1.3 - Interface 4.40".
+          $title = "$(($env:GITHUB_REPOSITORY -split '/')[1]) $env:BASE - Interface $env:INTERFACE"
+          Invoke-Gh (@('release', 'create', $env:TAG, '--repo', $env:GITHUB_REPOSITORY, '--draft', '--target', $env:COMMIT, '--title', $title, '--notes-file', $notesFile) + $files) | Out-Null
           Write-Summary "Draft $env:TAG saved with $env:ZIP. Test it in game, then publish it as the latest release."
 
   report:
