@@ -1,7 +1,7 @@
 # Prepare release. Run it by hand (Actions > Prepare release > Run workflow) after saving a DRAFT release on GitHub
 # whose tag is the version the plugin reports (for example v1.3). (Saving a draft cannot start it: GitHub does not
-# run workflows for draft releases.) It builds that version against the Ashita SDK pinned in .github/release.json,
-# runs the tests, and attaches the zip and SHA-256 sums to the draft with a Downloads section under your notes, plus
+# run workflows for draft releases.) It builds that version against the Ashita SDK pinned in .github/release.json
+# and attaches the zip and SHA-256 sums to the draft with a Downloads section under your notes, plus
 # a build attestation. Check the draft, then publish it yourself.
 name: Prepare release
 run-name: Prepare release ${{ inputs.tag }}
@@ -101,7 +101,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Build, test and package
+      - name: Build and package
         id: package
         shell: pwsh
         env:

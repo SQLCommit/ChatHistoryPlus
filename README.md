@@ -1,4 +1,4 @@
-# ChatHistoryPlus v1.1 - A Bigger Native Chat Log for Ashita v4
+# ChatHistoryPlus v1.2 - A Bigger Native Chat Log for Ashita v4
 
 Raises how much chat FFXI keeps, from 1000 messages per window to **2800**.
 
@@ -19,11 +19,14 @@ that is not one byte; see [How It Works](#how-it-works).
 
 ## Requirements
 
-- Ashita 4.3.1.2 (interface version 4.30) - the version ChatHistoryPlus was built and tested against.
+- Ashita 4.3.1.2 or later with plugin interface 4.30 - built against 4.3.1.2's SDK and tested on 4.3.2.1.
 
 ## Installation
 
-Copy `chathistoryplus.dll` into `Ashita-v4beta-main\plugins\`, then:
+Download `ChatHistoryPlus-vX.Y_Interface-N.NN.zip` from [Releases](https://github.com/SQLCommit/ChatHistoryPlus/releases) - the one whose
+`Interface-N.NN` matches your Ashita's plugin interface (each release's notes say which) - and extract it into your
+Ashita folder. It adds `chathistoryplus.dll` to `plugins\` and its docs to `docs\chathistoryplus\`. GitHub's
+"Source code" zip is not the plugin. Then:
 
 ```
 /load chathistoryplus
@@ -38,7 +41,7 @@ Copy `chathistoryplus.dll` into `Ashita-v4beta-main\plugins\`, then:
 | Command | Description |
 |---------|-------------|
 | `/chathistoryplus status` | Whether it is on, and how much history is held |
-| `/chathistoryplus diag` | Full report to `logs\chathistoryplus_diag.log` |
+| `/chathistoryplus diag` | Write a full report to your character's log |
 
 `/chp` for short.
 
@@ -113,12 +116,15 @@ store empty - blank lines, and scrollback that stops dead.
 Closed pages go to disk with a wider header, and the loader detects the header size when reading one
 back, so a file written at 50 and a file written at 140 are both readable.
 
-### Unloading
+### Files
 
-Not just un-patching. The live page is written back to the native 50-record layout, keeping the
-**most recent** 50 records and reporting how many older ones would not fit; and the stored
-140-record page files, which stock code cannot read, are dropped from the index rather than left for
-it to walk into.
+Its own log is one file per character:
+`logs\chathistoryplus\<Name>_<id>\chathistoryplus.log` in the Ashita folder (the same `<Name>_<id>` folder name Ashita gives addon
+settings). Before you log in it writes to a startup file in `logs\chathistoryplus\`, which moves into your character's log at
+login. Each log keeps its newest 1 MB; older lines are trimmed away. Several game clients can run from one Ashita folder
+at once without losing a line.
+
+`/chp diag` writes a full report into your character's log. If something goes wrong, run it and send that log.
 
 ### Three things worth knowing, all stock behaviour
 
@@ -129,11 +135,12 @@ it to walk into.
 
 ## Version history
 
-See **CHANGELOG.md**.
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Thanks
 
 - **The Ashita Team** - atom0s, thorny, and the Ashita Discord community
+- **Fel-FFXI** - reported that several clients sharing one Ashita folder lost each other's diag and log lines
 
 ## License
 

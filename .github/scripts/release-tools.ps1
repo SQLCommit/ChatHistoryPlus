@@ -64,7 +64,7 @@ function Get-AshitaInterfaceAt {
     return Get-SdkInterface (Invoke-Gh @('api', '-H', $script:RawFile, "repos/AshitaXI/Ashita-v4beta/contents/plugins/sdk/Ashita.h?ref=$Ref"))
 }
 
-# Builds (and tests) with the SDK at $Sdk, then checks the DLL is a 32-bit x86 module. Returns its full path.
+# Builds with the SDK at $Sdk, then checks the DLL is a 32-bit x86 module. Returns its full path.
 function Invoke-PluginBuild {
     param($Cfg, [string]$Sdk, [string]$Interface, [string]$Root = '.')
     $sdkPath = (Resolve-Path $Sdk).Path

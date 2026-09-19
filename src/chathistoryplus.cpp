@@ -2,6 +2,8 @@
  * ChatHistoryPlus - see chathistoryplus.hpp.
  */
 #include "chathistoryplus.hpp"
+#include "chp_util.h"
+#include "plugin_log.h"
 
 #include <cstdarg>
 #include <ctime>
@@ -177,6 +179,31 @@ namespace
     static_assert(sizeof(g_chInst)  / sizeof(g_chInst[0])  == 8, "splice arrays must agree");
     volatile uint32_t g_chHit[8];
     volatile uint32_t g_chFail[8];
+    bool      g_chDivPoked[6] = { false, false, false, false, false, false };
+    bool      g_chPinned = false;      // the DLL stays mapped until the game closes (set at unload, only when something stays)
+    bool      g_chRetained = false;    // something could not be put back: stays in, pass-through, until the game closes
+    volatile long g_chInflight = 0;    // threads between a detour's entry and its exit
+    CRITICAL_SECTION g_chLock;         // recursive: every detour body, and Enable/Disable's data conversion
+    bool      g_chLockInit = false;
+    plog::FileLog g_chLog;             // logs\chathistoryplus\<Name>_<id>\chathistoryplus.log; nothing goes to Ashita's log
+
+    void ch_lock_init(void)
+    {
+        if (g_chLockInit) return;
+        InitializeCriticalSection(&g_chLock);
+        g_chLockInit = true;
+    }
+
+    // Every detour body runs under the lock and counts itself in flight. While the plugin is off (never on, being
+    // turned off, or a splice that could not come out) a detour hands the call to its trampoline, which runs the
+    // stolen bytes and continues in the client's own function: the original behaviour, whatever else is going on.
+    struct DetourGuard
+    {
+        DetourGuard()  { InterlockedIncrement(&g_chInflight); EnterCriticalSection(&g_chLock); }
+        ~DetourGuard() { LeaveCriticalSection(&g_chLock); InterlockedDecrement(&g_chInflight); }
+        DetourGuard(const DetourGuard&) = delete;
+        DetourGuard& operator=(const DetourGuard&) = delete;
+    };
 
     inline uint8_t  ch_r8 (uintptr_t a) { return *reinterpret_cast<volatile uint8_t*>(a); }
     inline uint16_t ch_r16(uintptr_t a) { return *reinterpret_cast<volatile uint16_t*>(a); }
@@ -281,8 +308,9 @@ namespace
 
     void __fastcall ch_freeblob(void* self, void* edx)
     {
+        DetourGuard guard;
         ++g_chHit[7];
-        ChShadow* s = ch_find(reinterpret_cast<uintptr_t>(self));
+        ChShadow* s = g_chOn ? ch_find(reinterpret_cast<uintptr_t>(self)) : nullptr;
         if (s != nullptr)
         {
             s->size = 0;
@@ -291,9 +319,11 @@ namespace
         reinterpret_cast<void(__fastcall*)(void*, void*)>(g_chTramp[7])(self, edx);
     }
 
-    void __fastcall ch_recount(void* self, void*)
+    void __fastcall ch_recount(void* self, void* edx)
     {
+        DetourGuard guard;
         ++g_chHit[6];
+        if (!g_chOn) { reinterpret_cast<void(__fastcall*)(void*, void*)>(g_chTramp[6])(self, edx); return; }
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         ChShadow* s = ch_find(page);
         const uintptr_t data = ch_r32(page + PGF_DATA);
@@ -321,9 +351,11 @@ namespace
         ch_w8(page + PGF_COUNT, static_cast<uint8_t>(cnt > 255 ? 255 : cnt));
     }
 
-    char* __fastcall ch_resolve(void* self, void*, int idx)
+    char* __fastcall ch_resolve(void* self, void* edx, int idx)
     {
+        DetourGuard guard;
         ++g_chHit[5];
+        if (!g_chOn) return reinterpret_cast<char*(__fastcall*)(void*, void*, int)>(g_chTramp[5])(self, edx, idx);
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         const ChShadow* s = ch_find(page);
         if (idx < 0 || idx >= static_cast<int>(ch_r8(page + PGF_COUNT))) return nullptr;
@@ -336,9 +368,11 @@ namespace
         return reinterpret_cast<char*>(data + off);
     }
 
-    int __fastcall ch_append(void* self, void*, const char* txt)
+    int __fastcall ch_append(void* self, void* edx, const char* txt)
     {
+        DetourGuard guard;
         ++g_chHit[4];
+        if (!g_chOn) return reinterpret_cast<int(__fastcall*)(void*, void*, const char*)>(g_chTramp[4])(self, edx, txt);
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         if (txt == nullptr) return 1;
         ChShadow* s = ch_find(page);
@@ -411,9 +445,11 @@ namespace
         return bestH;
     }
 
-    int __fastcall ch_load(void* self, void*, void* file)
+    int __fastcall ch_load(void* self, void* edx, void* file)
     {
+        DetourGuard guard;
         ++g_chHit[2];
+        if (!g_chOn) return reinterpret_cast<int(__fastcall*)(void*, void*, void*)>(g_chTramp[2])(self, edx, file);
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         ChShadow* s = ch_find(page);
         if (s == nullptr) s = ch_alloc(page);
@@ -467,9 +503,11 @@ namespace
         return 1;
     }
 
-    int __fastcall ch_save(void* self, void*, void* file)
+    int __fastcall ch_save(void* self, void* edx, void* file)
     {
+        DetourGuard guard;
         ++g_chHit[3];
+        if (!g_chOn) return reinterpret_cast<int(__fastcall*)(void*, void*, void*)>(g_chTramp[3])(self, edx, file);
         const uintptr_t page = reinterpret_cast<uintptr_t>(self);
         ChShadow* s = ch_find(page);
         if (s == nullptr) return -1;
@@ -492,13 +530,15 @@ namespace
 
     void* __fastcall ch_ctor(void* self, void* edx, uint32_t fidx)
     {
+        DetourGuard guard;
         ++g_chHit[0];
         return reinterpret_cast<void*(__fastcall*)(void*, void*, uint32_t)>(g_chTramp[0])(self, edx, fidx);
     }
     void __fastcall ch_dtor(void* self, void* edx)
     {
+        DetourGuard guard;
         ++g_chHit[1];
-        ChShadow* s = ch_find(reinterpret_cast<uintptr_t>(self));
+        ChShadow* s = g_chOn ? ch_find(reinterpret_cast<uintptr_t>(self)) : nullptr;
         if (s != nullptr) s->page = 0;
         reinterpret_cast<void(__fastcall*)(void*, void*)>(g_chTramp[1])(self, edx);
     }
@@ -515,43 +555,38 @@ namespace
         return true;
     }
 
-    bool splice(uintptr_t addr, int steal, void* detour, void** tramp, uint8_t* orig, bool* inst)
+    // A trampoline for one entry: the stolen bytes, then a jump back. Allocated before anything is written into the
+    // client. Only a clean unload frees it (Release): by then every entry is back, put back with no thread inside a
+    // trampoline and none in a detour, and no stolen instruction is a call, so no thread holds a return into one.
+    void* make_tramp(uintptr_t addr, int steal)
     {
-        if (*inst) return true;
-        uint8_t* target = reinterpret_cast<uint8_t*>(addr);
         uint8_t* t = static_cast<uint8_t*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-        if (t == nullptr) return false;
-        memcpy(orig, target, steal);
-        memcpy(t, target, steal);
+        if (t == nullptr) return nullptr;
+        memcpy(t, reinterpret_cast<const void*>(addr), steal);
         t[steal] = 0xE9;
         *reinterpret_cast<int32_t*>(t + steal + 1) =
             static_cast<int32_t>((addr + steal) - (reinterpret_cast<uintptr_t>(t) + steal + 5));
-        *tramp = t;
-        DWORD op = 0;
-        if (!VirtualProtect(target, steal, PAGE_EXECUTE_READWRITE, &op))
-        { VirtualFree(t, 0, MEM_RELEASE); *tramp = nullptr; return false; }
-        target[0] = 0xE9;
-        *reinterpret_cast<int32_t*>(target + 1) =
-            static_cast<int32_t>(reinterpret_cast<uintptr_t>(detour) - (addr + 5));
-        for (int j = 5; j < steal; ++j) target[j] = 0x90;
-        VirtualProtect(target, steal, op, &op);
-        FlushInstructionCache(GetCurrentProcess(), target, steal);
-        *inst = true;
-        return true;
+        FlushInstructionCache(GetCurrentProcess(), t, 32);
+        return t;
     }
 
-    void unsplice(uintptr_t addr, int steal, const void* detour, void** tramp, uint8_t* orig, bool* inst)
+    // Raw byte writes into client code, for use with every other thread suspended (whenNoThreadIn): no allocation, and
+    // the result is read back. The caller has already checked what is there.
+    bool write_code(uintptr_t addr, const uint8_t* bytes, int n)
     {
-        if (!*inst) return;
         uint8_t* target = reinterpret_cast<uint8_t*>(addr);
-        if (!ours(addr, steal, detour)) { *inst = false; return; }
         DWORD op = 0;
-        if (!VirtualProtect(target, steal, PAGE_EXECUTE_READWRITE, &op)) return;
-        memcpy(target, orig, steal);
-        VirtualProtect(target, steal, op, &op);
-        FlushInstructionCache(GetCurrentProcess(), target, steal);
-        (void)tramp;
-        *inst = false;
+        if (!VirtualProtect(target, n, PAGE_EXECUTE_READWRITE, &op)) return false;
+        memcpy(target, bytes, n);
+        VirtualProtect(target, n, op, &op);
+        FlushInstructionCache(GetCurrentProcess(), target, n);
+        return memcmp(target, bytes, n) == 0;
+    }
+    void jump_bytes(uint8_t* out, uintptr_t addr, int steal, const void* detour)
+    {
+        out[0] = 0xE9;
+        *reinterpret_cast<int32_t*>(out + 1) = static_cast<int32_t>(reinterpret_cast<uintptr_t>(detour) - (addr + 5));
+        for (int j = 5; j < steal; ++j) out[j] = 0x90;
     }
 
     bool poke32(uintptr_t addr, uint32_t v)
@@ -561,7 +596,76 @@ namespace
         *reinterpret_cast<volatile uint32_t*>(addr) = v;
         VirtualProtect(reinterpret_cast<void*>(addr), 4, op, &op);
         FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(addr), 4);
-        return true;
+        return *reinterpret_cast<volatile uint32_t*>(addr) == v;
+    }
+
+    // The eight entries and what replaces them, in g_chTramp / g_chOrig / g_chInst order.
+    struct Site { uintptr_t addr; int steal; void* det; };
+    void ch_sites(Site* out)
+    {
+        const Site sites[8] = {
+            { g_a.ctor,    k_sigs[SI_CTOR].steal,    reinterpret_cast<void*>(&ch_ctor)    },
+            { g_a.dtor,    k_sigs[SI_DTOR].steal,    reinterpret_cast<void*>(&ch_dtor)    },
+            { g_a.load,    k_sigs[SI_LOAD].steal,    reinterpret_cast<void*>(&ch_load)    },
+            { g_a.save,    k_sigs[SI_SAVE].steal,    reinterpret_cast<void*>(&ch_save)    },
+            { g_a.append,  k_sigs[SI_APPEND].steal,  reinterpret_cast<void*>(&ch_append)  },
+            { g_a.resolve, k_sigs[SI_RESOLVE].steal, reinterpret_cast<void*>(&ch_resolve) },
+            { g_a.recount, k_sigs[SI_RECOUNT].steal, reinterpret_cast<void*>(&ch_recount) },
+            { g_a.freeblob, k_sigs[SI_FREEBLOB].steal, reinterpret_cast<void*>(&ch_freeblob) },
+        };
+        memcpy(out, sites, sizeof(sites));
+    }
+
+    // The spans no other thread may be in while the entries change: this DLL, the eight entries, their trampolines and
+    // the six divisor instructions. Returns the count written to `out` (at most 32).
+    size_t ch_ranges(const Site* sites, chp::CodeRange* out)
+    {
+        size_t n = 0;
+        HMODULE self = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&ch_append), &self) && self != nullptr)
+        {
+            const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(self);
+            const IMAGE_NT_HEADERS* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<uintptr_t>(self) + dos->e_lfanew);
+            out[n++] = chp::CodeRange{ reinterpret_cast<uintptr_t>(self), reinterpret_cast<uintptr_t>(self) + nt->OptionalHeader.SizeOfImage };
+        }
+        else out[n++] = chp::CodeRange{ 0, UINTPTR_MAX };   // unknown: every thread counts as busy
+        for (int i = 0; i < 8; ++i)
+        {
+            out[n++] = chp::CodeRange{ sites[i].addr, sites[i].addr + static_cast<uintptr_t>(sites[i].steal) };
+            if (g_chTramp[i] != nullptr)
+                out[n++] = chp::CodeRange{ reinterpret_cast<uintptr_t>(g_chTramp[i]), reinterpret_cast<uintptr_t>(g_chTramp[i]) + 32 };
+        }
+        for (int i = 0; i < 6; ++i) out[n++] = chp::CodeRange{ g_a.div[i] - 1, g_a.div[i] + 4 };
+        return n;
+    }
+
+    // Drops every stored page of `st` (the stock engine cannot read a page written at 140, and one rotated at 50 under
+    // 140 divisors is indexed wrongly) and sets the iterator's total to what the live page holds. Returns the pages dropped.
+    int ch_drop_pages(const Store& st)
+    {
+        int cleared = 0;
+        if (st.pages != 0) { ch_w8(st.cont + CT_PAGES, 0); cleared = st.pages; }
+        if (st.iter >= 0x10000)
+        {
+            uint32_t total = 0;
+            const uint32_t live = (st.live >= 0x10000) ? static_cast<uint32_t>(ch_r8(st.live + PGF_COUNT)) : 0u;
+            if (safe_r32(st.iter + IT_TOTAL, &total) && total != live) ch_w32(st.iter + IT_TOTAL, live);
+        }
+        return cleared;
+    }
+
+    // Pins this DLL: it stays mapped until the game closes, so nothing the client still points at (an entry JMP, a
+    // detour a thread is inside) can ever reach unmapped memory. Windows has no way back out of a pin, so it is the last
+    // thing the plugin does, not the first: Release pins only when an unload leaves something of the plugin in the client,
+    // or its log writer is still finishing a file. A clean unload stays unpinned, so the next /load maps the DLL fresh.
+    bool ch_pin(void)
+    {
+        if (g_chPinned) return true;
+        HMODULE self = nullptr;
+        g_chPinned = GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                                        reinterpret_cast<LPCSTR>(&ch_append), &self) != FALSE && self != nullptr;
+        return g_chPinned;
     }
 
     // -- adoption ---------------------------------------------------------------------------------
@@ -602,23 +706,24 @@ namespace
                 if (s == nullptr) continue;
                 int live = static_cast<int>(ch_r8(page + PGF_COUNT));
                 if (live > CH_MAX_N) live = CH_MAX_N;
-                const int first = (live > 50) ? (live - 50) : 0;
-                const int keep  = (live > 50) ? 50 : live;
                 const uintptr_t data = ch_r32(page + PGF_DATA);
                 const uint32_t  osz  = ch_size(page, s);
 
-                uint32_t nsz = 0;
-                if (data >= 0x10000)
+                // The stock table holds 50 SIGNED 16-bit offsets, so the newest records are kept only as far as every
+                // offset and the size stay under 0x8000: a record can be 2 KB, and 50 of them need not fit.
+                uint32_t lens[CH_MAX_N];
+                for (int k = 0; k < live; ++k)
                 {
-                    for (int k = 0; k < keep; ++k)
-                    {
-                        const uint32_t o = s->off[first + k];
-                        if (o == CH_DEAD || o >= osz) { ++nsz; continue; }
-                        uint32_t len = 0;
+                    const uint32_t o = s->off[k];
+                    uint32_t len = 0;
+                    if (data >= 0x10000 && o != CH_DEAD && o < osz)
                         while (o + len < osz && ch_r8(data + o + len) != 0) ++len;
-                        nsz += len + 1;
-                    }
+                    lens[k] = len;
                 }
+                int first = 0;
+                int keep = (data >= 0x10000) ? chp::fitRecords(lens, live, &first) : 0;
+                uint32_t nsz = 0;
+                for (int k = 0; k < keep; ++k) nsz += lens[first + k] + 1;
                 void* nb = (nsz > 0) ? ch_new(nsz) : nullptr;
                 if (nb != nullptr && data >= 0x10000)
                 {
@@ -647,11 +752,19 @@ namespace
                 }
                 else
                 {
-                    for (int k = 0; k < keep; ++k) ch_w16(page + k * 2, 0xFFFF);
+                    // No room for the packed copy (the process is out of address space): hand back an EMPTY page
+                    // rather than a count with no text behind it, the size word included (stock reads it as signed).
+                    if (data >= 0x10000) reinterpret_cast<fn_fblob>(g_a.freeblob)(reinterpret_cast<void*>(page), nullptr);
+                    ch_w32(page + PGF_DATA, 0);
+                    ch_w32(page + PGF_CAP, 0);
+                    ch_w16(page + PGF_SIZE, 0);
+                    s->size = 0;
+                    for (int k = 0; k < CH_MAX_N; ++k) s->off[k] = CH_DEAD;
+                    keep = 0;
                 }
                 for (int k = keep; k < 50; ++k) ch_w16(page + k * 2, 0xFFFF);
                 ch_w8(page + PGF_COUNT, static_cast<uint8_t>(keep));
-                g_chDropped += (live > 50) ? (live - 50) : 0;
+                g_chDropped += live - keep;
             }
             ++touched;
         }
@@ -662,10 +775,10 @@ namespace
 // ------------------------------------------------------------------------------------------------
 
 chathistoryplus::chathistoryplus(void)
-    : m_Core(nullptr), m_Log(nullptr), m_Id(0), m_Base(0), m_ImgStamp(0), m_Resolved(false), m_Want(0)
+    : m_Core(nullptr), m_Id(0), m_Base(0), m_ImgStamp(0), m_Resolved(false), m_Want(0)
 {
-    memset(g_res, 0, sizeof(g_res));
-    memset(&g_a, 0, sizeof(g_a));
+    // No global is touched here: on a pinned image a refused second instance runs this constructor while the live
+    // detours still use g_a (Initialize resets the globals only once the sole-instance check has passed).
 }
 
 void chathistoryplus::Print(uint8_t colour, const char* fmt, ...)
@@ -676,13 +789,22 @@ void chathistoryplus::Print(uint8_t colour, const char* fmt, ...)
     _vsnprintf_s(raw, sizeof(raw), _TRUNCATE, fmt, ap);
     va_end(ap);
 
-    if (m_DiagFp != nullptr)
+    if (colour == k_colFail && !m_Diag)
+    {
+        char named[512];
+        _snprintf_s(named, sizeof(named), _TRUNCATE, "%s Details: " HL("%s") "%s", raw, LogShown().c_str(), LogNote());
+        strcpy_s(raw, sizeof(raw), named);
+    }
+
+    if (m_Diag)
     {
         char flat[512]; size_t f = 0;
         for (size_t r = 0; raw[r] != '\0' && f + 1 < sizeof(flat); ++r)
             if (raw[r] != HL_ON && raw[r] != HL_OFF) flat[f++] = raw[r];
         flat[f] = '\0';
-        fprintf(m_DiagFp, "      %s\n", flat);
+        m_DiagText += "      ";
+        m_DiagText += flat;
+        m_DiagText += '\n';
         return;
     }
 
@@ -697,7 +819,7 @@ void chathistoryplus::Print(uint8_t colour, const char* fmt, ...)
     body[w] = '\0';
     plain[p] = '\0';
 
-    Log(colour == k_colFail, "%s", plain);
+    Log(colour == k_colFail || colour == k_colWarn, "%s", plain);
 
     IChatManager* cm = (m_Core != nullptr) ? m_Core->GetChatManager() : nullptr;
     if (cm == nullptr) return;
@@ -717,7 +839,7 @@ void chathistoryplus::Refuse(const char* fmt, ...)
     Log(true, "%s", buf);
     if (m_ToldWhy) return;
     m_ToldWhy = true;
-    Print(k_colWarn, "Nothing was patched - this client build is not one ChatHistoryPlus knows.");
+    Print(k_colWarn, "Nothing was patched - this client build is not one ChatHistoryPlus knows. Details: " HL("%s") "%s", LogShown().c_str(), LogNote());
 }
 
 void chathistoryplus::Log(bool warn, const char* fmt, ...)
@@ -727,50 +849,83 @@ void chathistoryplus::Log(bool warn, const char* fmt, ...)
     va_list ap; va_start(ap, fmt);
     _vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
     va_end(ap);
-    if (m_DiagFp != nullptr)
+    if (m_Diag)
     {
-        fprintf(m_DiagFp, "%s%s\n", warn ? "WARN  " : "      ", buf);
+        m_DiagText += warn ? "WARN  " : "      ";
+        m_DiagText += buf;
+        m_DiagText += '\n';
         return;
     }
-    if (m_Log == nullptr) return;
-    m_Log->Logf(static_cast<uint32_t>(warn ? Ashita::LogLevel::Warn : Ashita::LogLevel::Info),
-                "ChatHistoryPlus", "%s", buf);
+    g_chLog.write(warn ? "warn" : "info", buf);
 }
 
-bool chathistoryplus::DiagOpen(char* pathOut, size_t n)
+// Chat only: the usage lines, and the unload line (the log has it in its own words, with the run tag).
+void chathistoryplus::Chat(uint8_t colour, const char* text)
 {
-    if (m_Core == nullptr) return false;
-    const char* inst = m_Core->GetInstallPath();
-    if (inst == nullptr || inst[0] == '\0') return false;
-
-    const size_t len = strlen(inst);
-    const char* sep  = (len > 0 && (inst[len - 1] == '\\' || inst[len - 1] == '/')) ? "" : "\\";
-    _snprintf_s(pathOut, n, _TRUNCATE, "%s%slogs\\chathistoryplus_diag.log", inst, sep);
-
-    if (fopen_s(&m_DiagFp, pathOut, "a") != 0 || m_DiagFp == nullptr) { m_DiagFp = nullptr; return false; }
-
-    char stamp[64] = "unknown time";
-    __time64_t t = _time64(nullptr);
-    struct tm lt;
-    if (_localtime64_s(&lt, &t) == 0) strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &lt);
-    fprintf(m_DiagFp, "\n===== ChatHistoryPlus diag  %s =====\n", stamp);
-    return true;
+    IChatManager* cm = (m_Core != nullptr) ? m_Core->GetChatManager() : nullptr;
+    if (cm == nullptr || text == nullptr) return;
+    char body[512];
+    size_t w = 0;
+    for (size_t r = 0; text[r] != '\0' && w + 3 < sizeof(body); ++r)
+    {
+        if (text[r] == HL_ON)       { body[w++] = '\x1E'; body[w++] = static_cast<char>(k_colCmd); }
+        else if (text[r] == HL_OFF) { body[w++] = '\x1E'; body[w++] = static_cast<char>(colour); }
+        else                        { body[w++] = text[r]; }
+    }
+    body[w] = '\0';
+    char out[600];
+    _snprintf_s(out, sizeof(out), _TRUNCATE,
+        "\x1E\x51" "[" "\x1E\x06" "ChatHistoryPlus" "\x1E\x51" "]" "\x1E\x01" " " "\x1E%c" "%s" "\x1E\x01", colour, body);
+    cm->AddChatMessage(1, false, out);
 }
 
-void chathistoryplus::DiagClose(void)
+std::string chathistoryplus::LogShown(void) { return plog::underRoot(m_Root, g_chLog.path()); }
+// A refused load never moves its startup file, so it gets no "moves".
+const char* chathistoryplus::LogNote(void) { return (!m_Refused && g_chLog.atStartupFile()) ? " (it moves into your character's log at login)" : ""; }
+
+void chathistoryplus::DiagBegin(void)
 {
-    if (m_DiagFp == nullptr) return;
-    fclose(m_DiagFp);
-    m_DiagFp = nullptr;
+    m_Diag = true;
+    m_DiagText.clear();
+}
+
+// The report goes into the log as one block; chat says where.
+void chathistoryplus::DiagEnd(void)
+{
+    m_Diag = false;
+    char who[96];
+    _snprintf_s(who, sizeof(who), _TRUNCATE, "ChatHistoryPlus %.1f build %08X", GetVersion(), plog::ownImageStamp(&g_chLog));
+    g_chLog.writeDiag(who, m_DiagText);
+    m_DiagText.clear();
+    Print(k_colInfo, "Diagnostics written to " HL("%s") "%s.", LogShown().c_str(), LogNote());
+}
+
+// The character this client is playing (login status 2, party slot 0): a new one moves the log.
+void chathistoryplus::FollowCharacter(void)
+{
+    if (m_Core == nullptr) return;
+    IMemoryManager* mm = m_Core->GetMemoryManager();
+    IPlayer* player = mm != nullptr ? mm->GetPlayer() : nullptr;
+    IParty* party = mm != nullptr ? mm->GetParty() : nullptr;
+    if (player == nullptr || party == nullptr || player->GetLoginStatus() != 2) return;
+    const char* name = party->GetMemberName(0);
+    const uint32_t serverId = party->GetMemberServerId(0);
+    if (name == nullptr || name[0] == '\0' || serverId == 0) return;
+    const std::string key = plog::characterKey(name, serverId);
+    if (key == m_CharKey) return;
+    m_CharKey = key;
+    g_chLog.moveToCharacter(plog::characterLogPath(m_Root, "chathistoryplus", key), name);
 }
 
 void chathistoryplus::Usage(bool verbose)
 {
-    Print(k_colInfo, HL("/chathistoryplus") " [" HL("status") "|" HL("diag") "]   (or " HL("/chp") ")");
+    Chat(k_colInfo, HL("/chathistoryplus") " [" HL("status") "|" HL("diag") "]   (or " HL("/chp") ")");
     if (!verbose) return;
-    Print(k_colInfo, "Keeps %d messages per chat window instead of 1000. Applies itself; if your "
-                     "log has already started filling, it waits for your next login.",
-          CH_DEFAULT_N * CH_MAX_PAGES);
+    char line[200];
+    _snprintf_s(line, sizeof(line), _TRUNCATE, "Keeps %d messages per chat window instead of 1000. Applies itself; if your "
+                                               "log has already started filling, it waits for your next login.",
+                CH_DEFAULT_N * CH_MAX_PAGES);
+    Chat(k_colInfo, line);
 }
 
 bool chathistoryplus::Resolve(void)
@@ -887,7 +1042,7 @@ void chathistoryplus::Report(bool toLog)
         Refuse("%u of %u signatures did not resolve on client build 0x%08X",
                bad, static_cast<unsigned>(k_sigN), m_ImgStamp);
 
-    if (!toLog) return;
+    if (!toLog && bad == 0 && g_a.ok) return;   // the detail only when something failed, or in diag
     Log(false, "module FFXiMain.dll base 0x%08X  TimeDateStamp 0x%08X", m_Base, m_ImgStamp);
     for (size_t i = 0; i < k_sigN; ++i)
     {
@@ -1087,11 +1242,17 @@ void chathistoryplus::Probe(void)
 bool chathistoryplus::Enable(void)
 {
     const int n = CH_DEFAULT_N;
+    ch_lock_init();
     if (!m_Resolved && !Resolve()) { Report(false); return false; }
     if (!g_a.ok) { Refuse("addresses did not check out"); return false; }
     if (g_chOn)
     {
         Log(false, "already on at %d records/page", g_chN);
+        return false;
+    }
+    if (g_chRetained)
+    {
+        Log(true, "not enabling: an earlier attempt left code in the client that could not be put back");
         return false;
     }
 
@@ -1129,113 +1290,268 @@ bool chathistoryplus::Enable(void)
         }
     }
 
-    struct Site { uintptr_t addr; int steal; void* det; };
-    const Site sites[8] = {
-        { g_a.ctor,    k_sigs[SI_CTOR].steal,    reinterpret_cast<void*>(&ch_ctor)    },
-        { g_a.dtor,    k_sigs[SI_DTOR].steal,    reinterpret_cast<void*>(&ch_dtor)    },
-        { g_a.load,    k_sigs[SI_LOAD].steal,    reinterpret_cast<void*>(&ch_load)    },
-        { g_a.save,    k_sigs[SI_SAVE].steal,    reinterpret_cast<void*>(&ch_save)    },
-        { g_a.append,  k_sigs[SI_APPEND].steal,  reinterpret_cast<void*>(&ch_append)  },
-        { g_a.resolve, k_sigs[SI_RESOLVE].steal, reinterpret_cast<void*>(&ch_resolve) },
-        { g_a.recount, k_sigs[SI_RECOUNT].steal, reinterpret_cast<void*>(&ch_recount) },
-        { g_a.freeblob, k_sigs[SI_FREEBLOB].steal, reinterpret_cast<void*>(&ch_freeblob) },
-    };
-
-    g_chN = n;
-    for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
-    memset(const_cast<uint32_t*>(g_chHit), 0, sizeof(g_chHit));
-    memset(const_cast<uint32_t*>(g_chFail), 0, sizeof(g_chFail));
-
-    int adopted = 0;   // adopt before splicing
-    for (int i = 0; i < ns; ++i) adopted += ch_adopt(st[i], true);
-
-    for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
-        if (!splice(sites[i].addr, sites[i].steal, sites[i].det,
-                    &g_chTramp[i], g_chOrig[i], &g_chInst[i]))
+    Site sites[8];
+    ch_sites(sites);
+    for (int i = 0; i < 8; ++i)
+        if (g_chInst[i])
         {
-            Refuse("splice %d failed - rolling back", i + 1);
-            for (size_t j = 0; j < sizeof(sites) / sizeof(sites[0]); ++j)
-                unsplice(sites[j].addr, sites[j].steal, sites[j].det,
-                         &g_chTramp[j], g_chOrig[j], &g_chInst[j]);
-            for (int j = 0; j < ns; ++j) ch_adopt(st[j], false);
-            g_chN = 50;
+            Log(true, "not enabling: entry %d is still spliced from an earlier attempt", i + 1);
             return false;
         }
 
-    for (int i = 0; i < 6; ++i)
+    // Trampolines first (they allocate); the stolen bytes are recorded now and checked again under the freeze.
+    for (int i = 0; i < 8; ++i)
     {
-        g_chDivOrig[i] = *reinterpret_cast<const uint32_t*>(g_a.div[i]);
-        poke32(g_a.div[i], static_cast<uint32_t>(n));
+        if (g_chTramp[i] == nullptr) g_chTramp[i] = make_tramp(sites[i].addr, sites[i].steal);
+        else memcpy(g_chTramp[i], reinterpret_cast<const void*>(sites[i].addr), sites[i].steal);   // a kept one from a refused attempt: refresh its copy
+        if (g_chTramp[i] == nullptr)
+        {
+            Refuse("trampoline %d could not be allocated", i + 1);
+            return false;
+        }
+        memcpy(g_chOrig[i], reinterpret_cast<const void*>(sites[i].addr), sites[i].steal);
     }
-    g_chOn = true;
+
+    memset(const_cast<uint32_t*>(g_chHit), 0, sizeof(g_chHit));
+    memset(const_cast<uint32_t*>(g_chFail), 0, sizeof(g_chFail));
+
+    // One pass with every other thread stopped and none of them inside an entry, a trampoline, a divisor instruction
+    // or this DLL: adopt the live pages into the shadows (reads only), write the eight jumps and the six divisors, and
+    // switch on. A site that no longer holds the bytes resolved (another tool got there first) aborts the pass with
+    // everything written so far put back, so nothing is ever half published. Nothing here allocates.
+    chp::CodeRange ranges[33];
+    size_t nr = ch_ranges(sites, ranges);
+    {
+        // At install the stock page methods are still running as themselves: a thread inside one of their bodies would
+        // finish a stock append against the native table after the shadows were adopted, and that record would be lost.
+        // The eight page methods sit together just below the first divisor function on every build seen, so that whole
+        // span is watched too. (A thread inside a callee of a body, the allocator or file I/O, is still not seen.)
+        uintptr_t lo = sites[0].addr;
+        for (int i = 1; i < 8; ++i) if (sites[i].addr < lo) lo = sites[i].addr;
+        const uintptr_t hi = g_res[SI_DIV_A].at;
+        if (hi > lo && hi - lo < 0x4000) ranges[nr++] = chp::CodeRange{ lo, hi };
+    }
+    const DWORD skip[1] = { g_chLog.threadId() };
+    int failedSite = -1, adopted = 0;
+    bool foreign = false;
+    char why[600] = "";
+    const bool ran = chp::whenNoThreadIn(ranges, nr, skip, 1, 1000, [] { return g_chInflight == 0; }, [&]
+    {
+        g_chN = n;
+        for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
+        for (int i = 0; i < ns; ++i) adopted += ch_adopt(st[i], true);
+        int written = 0;
+        for (; written < 8; ++written)
+        {
+            // The entry must still match its signature, the same test Resolve passed at load: a hook that arrived
+            // since (a JMP or CALL in the stolen bytes) would be copied into the trampoline unrelocated.
+            const Sig& sig = k_sigs[written];   // SI_CTOR..SI_FREEBLOB are the sites' order
+            const uint8_t* live = reinterpret_cast<const uint8_t*>(sites[written].addr);
+            bool matches = live[0] != 0xE9 && live[0] != 0xE8;
+            for (size_t k = 0; k < sig.len && matches; ++k) if (sig.mask[k] == 'x' && live[k] != sig.pat[k]) matches = false;
+            if (!matches || memcmp(live, g_chOrig[written], sites[written].steal) != 0) { foreign = true; break; }
+            uint8_t jmp[16];
+            jump_bytes(jmp, sites[written].addr, sites[written].steal, sites[written].det);
+            if (!write_code(sites[written].addr, jmp, sites[written].steal)) break;
+            g_chInst[written] = true;
+        }
+        int poked = 0;
+        if (written == 8)
+            for (; poked < 6; ++poked)
+            {
+                g_chDivOrig[poked] = *reinterpret_cast<const uint32_t*>(g_a.div[poked]);
+                if (g_chDivOrig[poked] != 50 || !poke32(g_a.div[poked], static_cast<uint32_t>(n))) break;
+                g_chDivPoked[poked] = true;
+            }
+        if (written == 8 && poked == 6) { g_chOn = true; return; }
+        // Roll back what went in, in this same pass.
+        failedSite = (written < 8) ? written : 8 + poked;
+        for (int i = 0; i < poked; ++i) if (poke32(g_a.div[i], g_chDivOrig[i])) g_chDivPoked[i] = false;
+        for (int i = written - 1; i >= 0; --i)
+            if (write_code(sites[i].addr, g_chOrig[i], sites[i].steal)) g_chInst[i] = false;
+        for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
+        g_chN = 50;
+    }, why, sizeof why);
+
+    if (!ran)
+    {
+        Log(true, "no moment without another thread near the chat page code came within a second; nothing was patched");
+        Log(true, "  last try: %s", why);
+        Print(k_colWarn, "Could not patch: the client never left the chat code alone. Nothing was changed.");
+        return false;
+    }
+    if (!g_chOn)
+    {
+        bool left = false;
+        for (int i = 0; i < 8; ++i) left = left || g_chInst[i];
+        for (int i = 0; i < 6; ++i) left = left || g_chDivPoked[i];
+        if (foreign) Refuse("entry %d no longer holds the client's own bytes (another tool patched it); nothing was changed", failedSite + 1);
+        else Refuse("write %d failed - rolled back", failedSite + 1);
+        if (left)
+        {
+            g_chRetained = true;
+            Log(true, "the rollback could not put every byte back: the detours stay in as pass-through until the game closes");
+            Print(k_colFail, "A patch could not be undone; ChatHistoryPlus stays loaded doing nothing until you close the game.");
+        }
+        return false;
+    }
     m_Want = 0;
     Print(k_colInfo, "On at %d records/page -- %d messages per chat window. Adopted %d page(s) "
                      "across both windows.", n, n * CH_MAX_PAGES, adopted);
     return true;
 }
 
+// Turns the plugin off and puts the client back. Data first, under the lock (no detour body runs meanwhile, and every
+// page method still goes through a detour, so nothing reads the native tables half converted); then the code, in one
+// pass with the other threads stopped and none of them inside an entry, a trampoline or this DLL. Once `g_chOn` is
+// false a detour that gets in hands its call to the trampoline, so a splice left behind (foreign bytes, a pass that
+// never got its quiet moment) is harmless: Release pins the DLL for it, and the client runs its own code through it.
 bool chathistoryplus::Disable(void)
 {
-    if (!g_chOn) return true;
+    ch_lock_init();
+    Site sites[8];
+    bool anySplice = false, anyDiv = false;
+    if (g_a.ok) ch_sites(sites);
+    for (int i = 0; i < 8; ++i) anySplice = anySplice || g_chInst[i];
+    for (int i = 0; i < 6; ++i) anyDiv = anyDiv || g_chDivPoked[i];
+    if (!g_chOn && !anySplice && !anyDiv) return true;
+    if (!g_a.ok) return false;   // cannot happen with something installed; nothing to address it by
 
-    Store st[4];
-    const int ns = Stores(st, 4);
+    int back = 0, cleared = 0, was = g_chN;
+    if (g_chOn)
+    {
+        // A divisor that no longer reads ours belongs to another tool now: converting the pages to the stock layout
+        // under a foreign divisor would be the worst state available, so the plugin stays on instead.
+        for (int i = 0; i < 6; ++i)
+            if (g_chDivPoked[i] && *reinterpret_cast<const uint32_t*>(g_a.div[i]) != static_cast<uint32_t>(was))
+            {
+                Log(true, "divisor %d no longer reads %d (another tool changed it): staying on", i + 1, was);
+                Print(k_colFail, "Could not turn off: another tool changed the page divisor. ChatHistoryPlus stays on.");
+                return false;
+            }
+        EnterCriticalSection(&g_chLock);
+        Store st[4];
+        const int ns = Stores(st, 4);
+        for (int i = 0; i < ns; ++i) back += ch_adopt(st[i], false);
+        // The stored pages go (stock cannot read them), and iter+0x08, the store's total, becomes what the converted live
+        // page holds now.
+        if (g_chN > 50)
+            for (int i = 0; i < ns; ++i) cleared += ch_drop_pages(st[i]);
+        for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
+        g_chOn = false;
+        g_chN = 50;
+        LeaveCriticalSection(&g_chLock);
+    }
 
-    // Restore the native tables while the detours are STILL LIVE
-    int back = 0;
-    for (int i = 0; i < ns; ++i) back += ch_adopt(st[i], false);
-
-    int cleared = 0;
-    if (g_chN > 50)
-        for (int i = 0; i < ns; ++i)
+    chp::CodeRange ranges[32];
+    const size_t nr = ch_ranges(sites, ranges);
+    const DWORD skip[1] = { g_chLog.threadId() };
+    bool foreignSite[8] = {}, failedSite[8] = {}, foreignDiv[6] = {}, failedDiv[6] = {}, divisorsStuck = false;
+    char whyOff[600] = "";
+    const bool ran = chp::whenNoThreadIn(ranges, nr, skip, 1, 1000, [] { return g_chInflight == 0; }, [&]
+    {
+        for (int i = 0; i < 6; ++i)
         {
-            if (st[i].pages == 0) continue;
-            ch_w8(st[i].cont + CT_PAGES, 0);
-            cleared += st[i].pages;
+            if (!g_chDivPoked[i]) continue;
+            const uint32_t now = *reinterpret_cast<const uint32_t*>(g_a.div[i]);
+            if (now != static_cast<uint32_t>(was)) { foreignDiv[i] = true; divisorsStuck = true; continue; }
+            if (poke32(g_a.div[i], g_chDivOrig[i])) g_chDivPoked[i] = false; else { failedDiv[i] = true; divisorsStuck = true; }
         }
-
-    // iter+0x08 is the store's total record count
-    if (g_chN > 50)
-        for (int i = 0; i < ns; ++i)
+        if (divisorsStuck)
         {
-            if (st[i].iter < 0x10000) continue;
-            uint32_t total = 0;
-            if (!safe_r32(st[i].iter + IT_TOTAL, &total)) continue;
-            const uint32_t live = (st[i].liveCount > 50) ? 50u : static_cast<uint32_t>(st[i].liveCount);
-            if (total != live) ch_w32(st[i].iter + IT_TOTAL, live);
+            // Stock entries with a 140 divisor would index past the 50-entry table: put the divisors back to ours and
+            // keep the entries; the plugin goes back on (below) over the now stock-layout pages.
+            for (int i = 0; i < 6; ++i)
+                if (!g_chDivPoked[i] && *reinterpret_cast<const uint32_t*>(g_a.div[i]) == g_chDivOrig[i] && poke32(g_a.div[i], static_cast<uint32_t>(was)))
+                    g_chDivPoked[i] = true;
+            return;
         }
+        for (int i = 0; i < 8; ++i)
+        {
+            if (!g_chInst[i]) continue;
+            if (!ours(sites[i].addr, sites[i].steal, sites[i].det)) { foreignSite[i] = true; continue; }
+            if (write_code(sites[i].addr, g_chOrig[i], sites[i].steal)) g_chInst[i] = false; else failedSite[i] = true;
+        }
+    }, whyOff, sizeof whyOff);
 
-    struct Site { uintptr_t addr; int steal; void* det; };
-    const Site sites[8] = {
-        { g_a.ctor,    k_sigs[SI_CTOR].steal,    reinterpret_cast<void*>(&ch_ctor)    },
-        { g_a.dtor,    k_sigs[SI_DTOR].steal,    reinterpret_cast<void*>(&ch_dtor)    },
-        { g_a.load,    k_sigs[SI_LOAD].steal,    reinterpret_cast<void*>(&ch_load)    },
-        { g_a.save,    k_sigs[SI_SAVE].steal,    reinterpret_cast<void*>(&ch_save)    },
-        { g_a.append,  k_sigs[SI_APPEND].steal,  reinterpret_cast<void*>(&ch_append)  },
-        { g_a.resolve, k_sigs[SI_RESOLVE].steal, reinterpret_cast<void*>(&ch_resolve) },
-        { g_a.recount, k_sigs[SI_RECOUNT].steal, reinterpret_cast<void*>(&ch_recount) },
-        { g_a.freeblob, k_sigs[SI_FREEBLOB].steal, reinterpret_cast<void*>(&ch_freeblob) },
-    };
-    for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
-        unsplice(sites[i].addr, sites[i].steal, sites[i].det,
-                 &g_chTramp[i], g_chOrig[i], &g_chInst[i]);
-    for (int i = 0; i < 6; ++i) poke32(g_a.div[i], g_chDivOrig[i]);
-    for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
+    bool left = false;
+    for (int i = 0; i < 8; ++i)
+    {
+        if (foreignSite[i]) Log(true, "entry %d holds code this plugin did not write and was left alone", i + 1);
+        if (failedSite[i]) Log(true, "entry %d could not be written back", i + 1);
+        left = left || g_chInst[i];
+    }
+    for (int i = 0; i < 6; ++i)
+    {
+        if (foreignDiv[i]) Log(true, "divisor %d no longer reads %d (another tool changed it) and was left alone", i + 1, was);
+        if (failedDiv[i]) Log(true, "divisor %d could not be written back", i + 1);
+        left = left || g_chDivPoked[i];
+    }
+    if (!ran) Log(true, "no moment without another thread near the chat page code came within a second (last try: %s)", whyOff);
+    bool divisorMixed = false;
+    if (divisorsStuck)
+        for (int i = 0; i < 6; ++i)
+            if (!g_chDivPoked[i] || *reinterpret_cast<const uint32_t*>(g_a.div[i]) != static_cast<uint32_t>(was))
+            {
+                divisorMixed = true;
+                Log(true, "divisor %d is stuck at %u", i + 1, *reinterpret_cast<const uint32_t*>(g_a.div[i]));
+            }
+    if ((!ran || divisorsStuck) && was > 50)
+    {
+        // Back on, over pages now in the stock layout (a valid install state): the detours must own them again.
+        EnterCriticalSection(&g_chLock);
+        Store st[4];
+        int ns = Stores(st, 4);
+        // While the detours passed through, a worker thread's append may have rotated a full 50-record page into the
+        // store: under 140 divisors that page is indexed wrongly (the state Enable refuses), so it goes the way the
+        // stored pages went, and the total follows the live page.
+        int rotated = 0;
+        for (int i = 0; i < ns; ++i) rotated += ch_drop_pages(st[i]);
+        if (rotated) ns = Stores(st, 4);
+        g_chN = was;
+        for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
+        for (int i = 0; i < ns; ++i) ch_adopt(st[i], true);
+        g_chOn = true;
+        LeaveCriticalSection(&g_chLock);
+        if (rotated) Log(true, "%d page(s) rotated while the code was passing through were dropped before going back on", rotated);
+        if (!ran)
+        {
+            Log(true, "no quiet moment to put the code back: staying on at %d records/page (the stored pages were dropped)", was);
+            Print(k_colFail, "Could not turn off: the client never left the chat code alone, so ChatHistoryPlus stays on.");
+        }
+        else if (divisorMixed)
+        {
+            Log(true, "the divisors are mixed after a failed restore: scrollback indexing may be wrong until the game restarts");
+            Print(k_colFail, "Could not turn off cleanly: a page divisor is stuck. Scrollback may index wrongly until you restart the game.");
+        }
+        else
+        {
+            Log(true, "a divisor could not be put back: staying on at %d records/page (the stored pages were dropped)", was);
+            Print(k_colFail, "Could not turn off: a page divisor could not be put back, so ChatHistoryPlus stays on.");
+        }
+        return false;
+    }
+    g_chRetained = left;
 
-    const int was = g_chN;
-    g_chOn = false;
-    g_chN = 50;
-    Print(k_colWarn, "Off -- %d page(s) written back to the native 50-record table across both "
-                     "chat windows.", back);
-    if (g_chDropped > 0)
-        Print(k_colWarn, "Discarded %d of the oldest message(s) - the stock layout cannot hold them.",
-              g_chDropped);
-    g_chDropped = 0;
-    if (cleared > 0)
-        Print(k_colWarn, "Dropped %d stored page(s) the stock engine cannot read. Relog for a clean "
-                         "store.", cleared);
-    Log(false, "dropped %d page(s) written at %d records/page", cleared, was);
-    return true;
+    if (was > 50)
+    {
+        Print(k_colWarn, "Off -- %d page(s) written back to the native 50-record table across both "
+                         "chat windows.", back);
+        if (g_chDropped > 0)
+            Print(k_colWarn, "Discarded %d of the oldest message(s) - the stock layout cannot hold them.",
+                  g_chDropped);
+        g_chDropped = 0;
+        if (cleared > 0)
+            Print(k_colWarn, "Dropped %d stored page(s) the stock engine cannot read. Relog for a clean "
+                             "store.", cleared);
+        Log(false, "dropped %d page(s) written at %d records/page", cleared, was);
+    }
+    if (left)
+        Print(k_colFail, "Some of its changes could not be undone; they stay in (passing the client's calls straight "
+                         "through) until you close the game.");
+    else if (anySplice || anyDiv)
+        Log(false, "every change to the client is undone");
+    return !left;
 }
 
 void chathistoryplus::Tick(void)
@@ -1247,36 +1563,141 @@ void chathistoryplus::Tick(void)
     Store st[4];
     const int ns = Stores(st, 4);
     if (ns < 2) return;
-    for (int i = 0; i < ns; ++i) if (st[i].pages != 0) return;
+    for (int i = 0; i < ns; ++i)
+        if (st[i].pages != 0)
+        {
+            // A page already closed at 50 records: it can only switch over at the next login (README, "Why it only
+            // switches at login"). Said once, so a load partway through a session does not look like it is on.
+            if (!m_ToldArmed)
+            {
+                m_ToldArmed = true;
+                Print(k_colWarn, "Currently " HL("OFF") " -- your chat log has already started filling, so it turns on "
+                                 "by itself at your next login.");
+            }
+            return;
+        }
     if (!Enable())
         m_Want = 0;
 }
 
 void chathistoryplus::Direct3DPresent(const RECT*, const RECT*, HWND, const RGNDATA*)
 {
-    Tick();
+    if (m_FrameDead) return;
+    try
+    {
+        Tick();
+        const ULONGLONG now = GetTickCount64();
+        if (now < m_NextCharCheck) return;
+        m_NextCharCheck = now + 1000;
+        FollowCharacter();
+        if (g_chLog.takeWriteWarning())
+            Print(k_colWarn, "can't write its log (%s).", LogShown().c_str());
+        if (g_chLog.takeTrimWarning())
+            Print(k_colWarn, "its log is over 1.5 MB and cannot be trimmed (%s): is another program holding it open?", LogShown().c_str());
+    }
+    catch (...)
+    {
+        m_FrameDead = true;
+        Log(true, "error: Direct3DPresent: an unexpected error; its per-frame work stops for this session");
+        Print(k_colFail, "an unexpected error stopped its per-frame work.");
+    }
 }
 
 bool chathistoryplus::Initialize(IAshitaCore* core, ILogManager* logger, uint32_t id)
 {
-    m_Core = core; m_Log = logger; m_Id = id;
+    UNREFERENCED_PARAMETER(logger);
+    m_Core = core; m_Id = id;
+    m_Root = plog::ashitaRoot(&g_chLog);
+    m_Run  = plog::thisRun();
+    g_chLog.open(m_Root, plog::startupLogPath(m_Root, "chathistoryplus", m_Run));
+    char ver[16], iface[16];
+    _snprintf_s(ver, sizeof(ver), _TRUNCATE, "%.1f", GetVersion());
+    _snprintf_s(iface, sizeof(iface), _TRUNCATE, "%.2f", GetInterfaceVersion());
+    const std::string session = plog::sessionText("chathistoryplus", ver, plog::ownImageStamp(&g_chLog),
+                                                  plog::imageStamp(GetModuleHandleA("FFXiMain.dll")), iface, m_Run);
+    g_chLog.setSession(session, m_Run);
+    g_chLog.write("info", session);
+    g_chLog.start();
+    // One copy per client. A clean unload lets the lock go, so /load works again (a new build included). An unload that
+    // left something in the client pins the DLL and keeps the lock: a fresh copy could not tell what that image owns.
+    const std::string name = "Local\\chathistoryplus-sole-instance-" + std::to_string(GetCurrentProcessId());
+    m_SoleInstance = CreateMutexA(nullptr, TRUE, name.c_str());
+    if (m_SoleInstance == nullptr || GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        if (m_SoleInstance != nullptr) { CloseHandle(m_SoleInstance); m_SoleInstance = nullptr; }
+        m_Refused = true;
+        FollowCharacter();
+        Print(k_colFail, "ChatHistoryPlus is already loaded in this client, or an earlier load had to stay in memory "
+                         "until the game closes; restart the game to load it again.");
+        g_chLog.stop();
+        m_Core = nullptr;
+        return false;
+    }
+    ch_lock_init();
+    memset(g_res, 0, sizeof(g_res));
+    memset(&g_a, 0, sizeof(g_a));
+    const std::string root = m_Root;
+    const plog::Run run = m_Run;
+    g_chLog.post([root, run]
+    {
+        plog::deleteFiles(root, { "logs\\chathistoryplus\\chathistoryplus.log", "logs\\chathistoryplus\\chathistoryplus.log.old",
+                                  "logs\\chathistoryplus_diag.log" });
+        plog::cleanupStartupFiles(root, "chathistoryplus", run);
+    });
     Resolve();
-    Report(true);
+    Report(false);
     Usage();
     m_Want = CH_DEFAULT_N;
+    FollowCharacter();
     return true;
 }
 
 void chathistoryplus::Release(void)
 {
+    if (m_Refused) return;
+    m_Want = 0;
     Disable();
-    Log(false, "released.");
+    // Anything of the plugin's still in the client (an entry or a divisor that could not come out, or the plugin still
+    // on) can lead a thread into this DLL, so it stays mapped until the game closes.
+    bool left = g_chOn;
+    for (int i = 0; i < 8; ++i) left = left || g_chInst[i];
+    for (int i = 0; i < 6; ++i) left = left || g_chDivPoked[i];
+    if (left && !ch_pin())
+    {
+        Log(true, "could not pin the DLL (error %lu) while some of its changes are still in the client", GetLastError());
+        Print(k_colFail, "Could not keep itself in memory while some of its changes are still in the game; the game "
+                         "may crash, so restart it.");
+    }
+    Log(false, "unloaded%s%s", left ? "; some of its changes stay in, so the DLL stays mapped until the game closes" : "",
+        plog::runSuffix(m_Run).c_str());
+    // The writer stops last. A stalled share keeps it past 2 s: it finishes by itself and the DLL must stay mapped.
+    if (!g_chLog.stop()) ch_pin();
+    if (g_chPinned)
+    {
+        // A pinned image keeps its state for the rest of the session: the lock stays with it, so another load is refused.
+        if (m_Core != nullptr)
+            Chat(k_colInfo, "Unloaded; it stays in memory until the game closes, so restart the game to load "
+                            "ChatHistoryPlus again.");
+    }
+    else
+    {
+        // Clean: Disable put every entry back with no thread inside a trampoline and none in a detour, so nothing can
+        // reach this DLL, the trampolines or the lock any more. They go, and the next /load maps the DLL fresh.
+        for (int i = 0; i < 8; ++i)
+            if (g_chTramp[i] != nullptr) { VirtualFree(g_chTramp[i], 0, MEM_RELEASE); g_chTramp[i] = nullptr; }
+        if (g_chLockInit) { DeleteCriticalSection(&g_chLock); g_chLockInit = false; }
+        if (m_SoleInstance != nullptr)
+        {
+            ReleaseMutex(m_SoleInstance);
+            CloseHandle(m_SoleInstance);
+            m_SoleInstance = nullptr;
+        }
+    }
+    m_Core = nullptr;
 }
 
-bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool injected)
+bool chathistoryplus::Command(const char* command)
 {
-    UNREFERENCED_PARAMETER(mode);
-    UNREFERENCED_PARAMETER(injected);
     if (command == nullptr) return false;
 
     std::vector<std::string> args;
@@ -1291,14 +1712,14 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
     if (args.empty()) return false;
     if (_stricmp(args[0].c_str(), "/chathistoryplus") != 0 && _stricmp(args[0].c_str(), "/chp") != 0)
         return false;
+    m_CmdOurs = true;
 
     const char* a = (args.size() > 1) ? args[1].c_str() : "status";
 
     if (_stricmp(a, "diag") == 0)
     {
         if (!g_chOn) Resolve();
-        char path[MAX_PATH];
-        const bool toFile = DiagOpen(path, sizeof(path));
+        DiagBegin();
         Report(true);
         Probe();
         if (g_chOn)
@@ -1309,17 +1730,30 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
                        "so they are reported from the cached scan rather than re-read)",
                 spl, static_cast<unsigned>(k_sigN));
         }
-        if (toFile)
-        {
-            DiagClose();
-            Print(k_colInfo, "Diagnostics written to " HL("logs\\chathistoryplus_diag.log")
-                             " in your Ashita folder.");
-        }
-        else Print(k_colWarn, "Could not open the diagnostic file - written to the Ashita log instead.");
+        DiagEnd();
     }
     else if (_stricmp(a, "status") == 0) { Status(); if (args.size() <= 1) Usage(false); }
     else Usage(true);
     return true;
+}
+
+bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool injected)
+{
+    UNREFERENCED_PARAMETER(mode);
+    UNREFERENCED_PARAMETER(injected);
+    m_CmdOurs = false;
+    try
+    {
+        return Command(command);
+    }
+    catch (...)
+    {
+        m_Diag = false;
+        if (!m_CmdOurs) return false;   // it failed before it was known to be ours: leave it to its owner
+        Log(true, "error: HandleCommand: an unexpected error");
+        Print(k_colFail, "the command failed with an unexpected error.");
+        return true;
+    }
 }
 
 // ------------------------------------------------------------------------------------------------

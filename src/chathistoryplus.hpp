@@ -10,8 +10,10 @@
 #define CHATHISTORYPLUS_HPP_INCLUDED
 
 #include "Ashita.h"
+#include "plugin_log.h"
 
 #include <cstdint>
+#include <string>
 #include <windows.h>
 
 enum SigCode : uint8_t { SIG_OK = 0, SIG_NOT_FOUND, SIG_AMBIGUOUS, SIG_FAULTED };
@@ -48,8 +50,9 @@ struct Store
 class chathistoryplus final : public IPlugin
 {
     IAshitaCore* m_Core;
-    ILogManager* m_Log;
     uint32_t     m_Id;
+    HANDLE       m_SoleInstance = nullptr;
+    bool         m_Refused = false;   // Initialize refused (a second copy): Release does nothing
 
     uintptr_t m_Base;
     uint32_t  m_ImgStamp;
@@ -62,11 +65,26 @@ class chathistoryplus final : public IPlugin
     void Report(bool toLog);
     int  Stores(Store* out, int max);
     void Print(uint8_t colour, const char* fmt, ...);
-    FILE* m_DiagFp = nullptr;
-    bool  DiagOpen(char* pathOut, size_t n);
-    void  DiagClose(void);
+
+    // The log (plugin_log.h): one file per character, the diag report inside it.
+    std::string m_Root;
+    plog::Run   m_Run;
+    std::string m_CharKey;
+    ULONGLONG   m_NextCharCheck = 0;
+    bool        m_FrameDead = false;
+    bool        m_CmdOurs = false;
+    bool        m_Diag = false;
+    std::string m_DiagText;
+    void DiagBegin(void);
+    void DiagEnd(void);
+    void FollowCharacter(void);
+    std::string LogShown(void);
+    const char* LogNote(void);
+    void Chat(uint8_t colour, const char* text);
+    bool Command(const char* command);
 
     bool m_ToldWhy = false;
+    bool m_ToldArmed = false;   // said once that it waits for the next login (the log had started filling)
     void Refuse(const char* fmt, ...);
 
     void Log(bool warn, const char* fmt, ...);
@@ -85,8 +103,8 @@ public:
     const char* GetName(void) const override { return "ChatHistoryPlus"; }
     const char* GetAuthor(void) const override { return "SQLCommit"; }
     const char* GetDescription(void) const override { return "Raises how much chat history FFXI keeps."; }
-    const char* GetLink(void) const override { return ""; }
-    double GetVersion(void) const override { return 1.1; }
+    const char* GetLink(void) const override { return "https://github.com/SQLCommit/ChatHistoryPlus"; }
+    double GetVersion(void) const override { return 1.2; }
     double GetInterfaceVersion(void) const override { return ASHITA_INTERFACE_VERSION; }
     int32_t GetPriority(void) const override { return 0; }
     uint32_t GetFlags(void) const override

@@ -1,4 +1,5 @@
-# Builds build\Release\chathistoryplus.dll with CMake and the Ashita SDK at -Sdk, then runs the tests if this source has them (no game needed). Called by the workflows.
+# Builds build\Release\chathistoryplus.dll with CMake and the Ashita SDK at -Sdk. Called by the workflows. The tests are not
+# in the release repository (only what runs and builds the plugin is); they run before every deploy instead.
 param([Parameter(Mandatory = $true)][string]$Sdk)
 $ErrorActionPreference = 'Stop'
 Push-Location (Join-Path $PSScriptRoot '../..')
@@ -9,10 +10,4 @@ try {
     if ($LASTEXITCODE) { throw "CMake could not configure the build (exit $LASTEXITCODE)." }
     cmake --build build --config Release | Out-Host
     if ($LASTEXITCODE) { throw "The build failed (exit $LASTEXITCODE)." }
-    if (Test-Path tests\run.cmd) {   # an older release's source may not carry the tests
-        cmd /c tests\run.cmd | Out-Host
-        if ($LASTEXITCODE) { throw "The tests failed (exit $LASTEXITCODE)." }
-    } else {
-        Write-Host '::warning::This source has no tests\run.cmd; only the build was checked.'
-    }
 } finally { Pop-Location }

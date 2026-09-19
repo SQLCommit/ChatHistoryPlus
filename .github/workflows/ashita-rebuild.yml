@@ -1,9 +1,9 @@
 # Ashita rebuild. Run it by hand (Actions > Ashita rebuild > Run workflow) when Ashita publishes a new release, and
 # enter the commit ID of that Ashita release. If its plugin interface differs from the latest release of this plugin,
-# it rebuilds that release's source against the new SDK, runs the tests, and saves a DRAFT release tagged
+# it rebuilds that release's source against the new SDK and saves a DRAFT release tagged
 # vX.Y_Interface-N.NN with the zip, SHA-256 sums and a build attestation. The original release stays as it is.
 # Test the draft's zip in game, then publish it (as the latest release). If nothing changed it does nothing; if the
-# build or tests fail it opens an issue instead.
+# build fails it opens an issue instead.
 name: Ashita rebuild
 run-name: Ashita rebuild for ${{ inputs.ashita_commit }}
 
@@ -94,7 +94,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Build, test and package
+      - name: Build and package
         id: package
         shell: pwsh
         working-directory: release
@@ -205,6 +205,6 @@ jobs:
           $open = gh issue list --repo $env:GITHUB_REPOSITORY --state open --search "in:title $env:INTERFACE rebuild" --json title --jq '.[].title'
           if ($LASTEXITCODE) { throw 'Could not search the existing issues.' }
           if (@($open) -contains $title) { Write-Host 'An issue for this is already open.'; exit 0 }
-          $body = "The Ashita rebuild of $env:BASE for interface $env:INTERFACE failed. The run shows which step (checkout, build, tests, packaging or publishing) and whether a draft was left behind.`n`n$env:RUN_URL"
+          $body = "The Ashita rebuild of $env:BASE for interface $env:INTERFACE failed. The run shows which step (checkout, build, packaging or publishing) and whether a draft was left behind.`n`n$env:RUN_URL"
           gh issue create --repo $env:GITHUB_REPOSITORY --title $title --body $body
           if ($LASTEXITCODE) { throw 'Could not open the issue.' }
