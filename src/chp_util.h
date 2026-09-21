@@ -1,13 +1,6 @@
-/**
- * ChatHistoryPlus - helpers with no Ashita dependency, so tests/chathistoryplus_test.cpp compiles them.
- *
- * ThreadFreeze / whenNoThreadIn: every other thread of the process suspended, and a check that none of them is inside
- * a span of code about to change. Same design as truefps's patch.h (2026-09-14): threads are walked with
- * NtGetNextThread (no allocation: a suspended thread may hold the heap lock) until a pass finds nothing new, and
- * anything that cannot be established makes the freeze incomplete, which counts as "a thread might be there".
- *
- * chp_fit: how many of a page's newest records fit the stock layout when the plugin hands the page back.
- */
+// Thread-freeze and native-page sizing helpers.
+// Walk threads with NtGetNextThread to avoid allocating while a frozen thread holds the heap lock.
+// Incomplete enumeration or unreadable instruction pointers fail closed.
 #pragma once
 
 #include <windows.h>
@@ -46,7 +39,7 @@ namespace chp
                     const DWORD id = GetThreadId(next);
                     if (id == self || holds(id)) { current = next; continue; }
                     if (count_ == kMaxThreads) { current = next; complete_ = false; failStep_ = "too many threads"; break; }
-                    // An exited thread whose object another handle keeps alive is still walked, and SuspendThread refuses it (access denied, measured in pol.exe 2026-09-14 by freezeprobe). It runs nothing: skip it.
+                    // An exited thread may still have a handle; skip it when SuspendThread refuses.
                     { DWORD code = 0; if (GetExitCodeThread(next, &code) && code != STILL_ACTIVE) { current = next; continue; } }
                     if (SuspendThread(next) == DWORD(-1)) { DWORD code = 0; if (GetExitCodeThread(next, &code) && code != STILL_ACTIVE) { current = next; continue; } current = next; complete_ = false; failStep_ = "SuspendThread"; failTid_ = id; failErr_ = GetLastError(); break; }
                     Thread& t = threads_[count_++];
@@ -74,8 +67,7 @@ namespace chp
         ThreadFreeze(const ThreadFreeze&) = delete;
         ThreadFreeze& operator=(const ThreadFreeze&) = delete;
 
-        // True if any suspended thread not in `skip` has its instruction pointer in one of `ranges`, or might (an
-        // unread pointer, or an incomplete freeze). `skip` is for the plugin's own worker threads.
+        // Unreadable IPs and incomplete freezes count as busy; skip excludes our worker threads.
         bool anyInRanges(const CodeRange* ranges, size_t n, const DWORD* skip = nullptr, size_t skipCount = 0) const
         {
             if (!complete_) return true;
@@ -91,7 +83,6 @@ namespace chp
             return false;
         }
         bool complete() const { return complete_; }
-        // Why the last check said "busy": for the log. No allocation.
         void describe(char* out, size_t size, const CodeRange* ranges, size_t n, const DWORD* skip = nullptr, size_t skipCount = 0) const
         {
             int len = _snprintf_s(out, size, _TRUNCATE, "freeze %s (%s tid %lu err %lu), %u threads, %u without a readable context; in range:",
@@ -130,9 +121,8 @@ namespace chp
         int passes_ = 0;
     };
 
-    // Runs `act` with every other thread suspended, at a moment when none of them (except `skip`) is in `ranges` and
-    // `gate()` agrees: tries up to `attempts` times, 1 ms apart. `act` must not allocate or take a lock another
-    // (suspended) thread may hold. Returns whether `act` ran.
+    // Try up to attempts quiet freezes, 1 ms apart, with gate() satisfied.
+    // act must not allocate or take a lock that a frozen thread could hold.
     template <class Gate, class Act>
     bool whenNoThreadIn(const CodeRange* ranges, size_t n, const DWORD* skip, size_t skipCount, int attempts, Gate&& gate, Act&& act, char* why = nullptr, size_t whySize = 0)
     {
@@ -153,10 +143,9 @@ namespace chp
         return false;
     }
 
-    // The stock page: a 50-entry table of 16-bit offsets that the engine reads as SIGNED, so an offset (and the
-    // page's size word) past 0x7FFF is not representable. Given the byte length of each of `live` records, oldest
-    // first (a dead record counts 1 for its terminator), returns how many of the NEWEST fit: at most 50, and only as
-    // many as keep every offset and the total under 0x8000. `firstOut` is the index of the oldest kept record.
+    // Keep the newest records fitting at most 50 signed 16-bit offsets and total size < 0x8000.
+    // Input lengths are oldest-first; dead records cost one terminator byte. firstOut is the oldest kept
+    // index.
     inline int fitRecords(const uint32_t* lengths, int live, int* firstOut)
     {
         const uint32_t limit = 0x7FFFu;

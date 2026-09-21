@@ -1,4 +1,4 @@
-// plugin_log.h - an Ashita plugin's own log: one file per character, appended only, kept under 1 MB.
+// Per-character append-only logging with a 1 MB target cap.
 #pragma once
 #include <windows.h>
 #include <cctype>
@@ -25,9 +25,9 @@ inline constexpr ULONGLONG kStartupKeepMs = 24ull * 60 * 60 * 1000;   // a left-
 inline constexpr ULONGLONG kFailWarnMs = 10000;             // writes failing this long are reported in chat
 inline constexpr size_t kQueueMax = 2000;                   // lines waiting past this are dropped and counted
 
-// ---- names ------------------------------------------------------------------------------------------------------------
+// Names.
 
-// Letters, digits, '_' and '-' stay; anything else becomes '_' (a file or folder name, a run tag field).
+// Sanitize path components and run-tag fields.
 inline std::string cleanName(const std::string& s) {
     std::string out;
     out.reserve(s.size());
@@ -35,12 +35,12 @@ inline std::string cleanName(const std::string& s) {
     return out;
 }
 
-// The folder Ashita's settings library gives a character: "<Name>_<server id>".
+// Character directory key: <Name>_<server id>.
 inline std::string characterKey(const std::string& name, uint32_t serverId) { return cleanName(name) + "_" + std::to_string(serverId); }
 
-// ---- one run of the game ----------------------------------------------------------------------------------------------
+// Run identity.
 
-// One process run: the computer, the process id and the process start time. Together they never name two runs.
+// Host, PID and process start time distinguish runs across clients.
 struct Run {
     std::string computer;
     DWORD pid = 0;
@@ -74,7 +74,6 @@ inline Run thisRun() {
     return r;
 }
 
-// "<computer>/<pid>/<hex>" back into a Run. False for anything else.
 inline bool parseTag(const std::string& tag, Run& out) {
     const size_t a = tag.find('/');
     const size_t b = a == std::string::npos ? std::string::npos : tag.find('/', a + 1);
@@ -90,7 +89,7 @@ inline bool parseTag(const std::string& tag, Run& out) {
     return true;
 }
 
-// The run named by the ", run <tag>" in a log line. False when the line has none (an older version's line).
+// Read the run tag; older log lines may omit it.
 inline bool runInLine(const std::string& line, Run& out) {
     const size_t at = line.rfind(", run ");
     if (at == std::string::npos) return false;
@@ -99,8 +98,7 @@ inline bool runInLine(const std::string& line, Run& out) {
     return parseTag(line.substr(at + 6, end - (at + 6)), out);
 }
 
-// Whether that run is still going. Only this computer's runs can be looked at: another computer's count as not going,
-// and callers leave those alone before asking. A process this user may not open counts as going (nothing is decided).
+// Check local runs only. Treat access denied as still running; callers filter out remote hosts.
 inline bool runAlive(const Run& r) {
     if (r.computer != computerName() || r.pid == 0) return false;
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, r.pid);
@@ -112,9 +110,9 @@ inline bool runAlive(const Run& r) {
     return running && (r.start == 0 || start == r.start);
 }
 
-// ---- paths ------------------------------------------------------------------------------------------------------------
+// Paths.
 
-// The Ashita folder from a DLL path: the folder above plugins\ ("C:\Ashita\plugins\x.dll" -> "C:\Ashita\").
+// Resolve the Ashita root above the plugins directory.
 inline std::string rootOfDll(const std::string& dllPath) {
     const size_t slash = dllPath.find_last_of("\\/");
     if (slash == std::string::npos) return std::string();
@@ -122,7 +120,7 @@ inline std::string rootOfDll(const std::string& dllPath) {
     const size_t up = dir.size() > 1 ? dir.find_last_of("\\/", dir.size() - 2) : std::string::npos;
     return up == std::string::npos ? dir : dir.substr(0, up + 1);
 }
-// The Ashita folder of the DLL holding `anyAddressInside` (any function or global of the plugin): known before Ashita's core.
+// Resolve the root from a module address before Ashita core is available.
 inline std::string ashitaRoot(const void* anyAddressInside) {
     HMODULE self = nullptr;
     char path[MAX_PATH] = {};
@@ -140,8 +138,7 @@ inline std::string startupLogPath(const std::string& root, const std::string& pl
     _snprintf_s(tail, sizeof tail, _TRUNCATE, "_%lu_%016llX.log", static_cast<unsigned long>(r.pid), static_cast<unsigned long long>(r.start));
     return logsDir(root, plugin) + "startup_" + r.computer + tail;
 }
-// A startup file's name back into its run: "startup_<computer>_<pid>_<hex>.log", or an older version's "startup_<pid>.log"
-// (this computer, start not known). False for anything else.
+// Accept startup_<host>_<pid>_<start>.log and legacy startup_<pid>.log names.
 inline bool parseStartupName(const std::string& fileName, Run& out) {
     const std::string head = "startup_", tail = ".log";
     if (fileName.size() <= head.size() + tail.size() || fileName.compare(0, head.size(), head) != 0 ||
@@ -162,20 +159,18 @@ inline bool parseStartupName(const std::string& fileName, Run& out) {
     if (a == std::string::npos || a == 0) return false;
     return parseTag(mid.substr(0, a) + "/" + mid.substr(a + 1, b - a - 1) + "/" + mid.substr(b + 1), out);
 }
-// `path` relative to the Ashita folder, as chat and the log show it; `path` itself when it is elsewhere.
+// Use a relative path inside the Ashita root; otherwise retain the full path.
 inline std::string underRoot(const std::string& root, const std::string& path) {
     if (!root.empty() && path.size() > root.size() && _strnicmp(path.c_str(), root.c_str(), root.size()) == 0) return path.substr(root.size());
     return path;
 }
-// Makes every folder of `path` below `root` (logs\ and logs\<plugin>\ may not exist yet).
 inline void ensureDirs(const std::string& root, const std::string& path) {
     for (size_t i = root.size(); i < path.size(); i++)
         if (path[i] == '\\' || path[i] == '/') CreateDirectoryA(path.substr(0, i).c_str(), nullptr);
 }
 
-// ---- lines ------------------------------------------------------------------------------------------------------------
+// Log records.
 
-// "[2026-09-18 21:00:21.820] [info] text\n"
 inline std::string stampLine(const char* level, const std::string& text) {
     SYSTEMTIME t;
     GetLocalTime(&t);
@@ -185,7 +180,7 @@ inline std::string stampLine(const char* level, const std::string& text) {
     return stamp + text + "\n";
 }
 
-// The PE time stamp of a loaded module (its build); 0 when it is not a readable image.
+// Read the module's PE timestamp; return 0 for an unreadable image.
 inline uint32_t imageStamp(HMODULE module) {
     if (!module) return 0;
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
@@ -200,21 +195,18 @@ inline uint32_t ownImageStamp(const void* anyAddressInside) {
                : 0;
 }
 
-// The line that starts every session and every stretch of a character's log:
-// "<plugin> <version> loading, build <hex>, client build <hex>, Ashita interface <n>, run <tag>".
 inline std::string sessionText(const std::string& plugin, const std::string& version, uint32_t build, uint32_t clientBuild, const std::string& ashitaInterface,
                                const Run& run) {
     char mid[96];
     _snprintf_s(mid, sizeof mid, _TRUNCATE, " loading, build %08X, client build %08X, Ashita interface ", build, clientBuild);
     return plugin + " " + version + mid + ashitaInterface + ", run " + run.tag();
 }
-// ", run <tag>": the end of an `unloaded` line, so the unclean-end check can pair it with its session line.
+// Pair unload records with their session by run tag.
 inline std::string runSuffix(const Run& run) { return ", run " + run.tag(); }
 
-// ---- files ------------------------------------------------------------------------------------------------------------
+// File I/O.
 
-// Appends `text` with one write. Opened for appending only and fully shared: two clients writing one file never block or
-// overwrite each other.
+// Append in one shared write without overwriting another client's data.
 inline bool appendText(const std::string& path, const std::string& text) {
     if (text.empty()) return true;
     HANDLE file = CreateFileA(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -231,7 +223,7 @@ inline uint64_t fileSize(const std::string& path) {
     return (uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
 }
 
-// A file's text, or its last `maxBytes` from the first line start inside them. A missing file is empty and true.
+// Read the last maxBytes from a line boundary. A missing file is a successful empty read.
 inline bool readText(const std::string& path, std::string& out, uint64_t maxBytes = 4 * kCapBytes) {
     out.clear();
     HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -261,9 +253,8 @@ inline bool readText(const std::string& path, std::string& out, uint64_t maxByte
 
 enum class Trim { NotNeeded, Trimmed, Busy, Failed };
 
-// Keeps a log under `cap`: when the file plus `incoming` bytes would pass it, only the newest `keep` bytes
-// stay, from the first line start in them. Opened with read sharing only: a reader may keep the file open, another writer
-// may not. Busy: another client holds the file for writing right now - append anyway and try again at the next batch.
+// Trim to the newest keep bytes at a line boundary, allowing readers but excluding writers.
+// If another writer holds the file, append now and retry trimming next batch.
 inline Trim trimIfNeeded(const std::string& path, uint64_t incoming, uint64_t cap = kCapBytes, uint64_t keep = kKeepBytes) {
     const uint64_t before = fileSize(path);
     if (before == UINT64_MAX || before + incoming <= cap) return Trim::NotNeeded;
@@ -297,11 +288,9 @@ inline Trim trimIfNeeded(const std::string& path, uint64_t incoming, uint64_t ca
     return ok ? Trim::Trimmed : Trim::Failed;
 }
 
-// ---- sessions ---------------------------------------------------------------------------------------------------------
+// Sessions.
 
-// Whether the last session in a character's log ended without its own `unloaded` or `log continues in` line, ran on this
-// computer, and is no longer going: the game closed or crashed. A session line without a run tag (an
-// older version) or from another computer gives false.
+// Detect an unclosed session from a terminated local run. Ignore missing tags and remote hosts.
 inline bool endedUncleanly(const std::string& path) {
     std::string text;
     if (!readText(path, text, kTrimWarnBytes) || text.empty()) return false;
@@ -325,8 +314,7 @@ inline bool endedUncleanly(const std::string& path) {
     return !runAlive(run);
 }
 
-// Deletes this computer's startup files left by runs that are over and were last written more than `keepMs` ago.
-// This run's own file and other computers' files are left alone.
+// Remove stale local startup logs, excluding active runs and this run.
 inline void cleanupStartupFiles(const std::string& root, const std::string& plugin, const Run& self, ULONGLONG keepMs = kStartupKeepMs) {
     const std::string dir = logsDir(root, plugin);
     WIN32_FIND_DATAA found{};
@@ -346,12 +334,10 @@ inline void cleanupStartupFiles(const std::string& root, const std::string& plug
     FindClose(find);
 }
 
-// Deletes each file named relative to the Ashita folder, if it is there (the old layout's files).
 inline void deleteFiles(const std::string& root, const std::vector<std::string>& relativePaths) {
     for (const auto& rel : relativePaths) DeleteFileA((root + rel).c_str());
 }
 
-// Deletes `fileName` in every character folder under logs\<plugin>\.
 inline void deleteInCharacterFolders(const std::string& root, const std::string& plugin, const std::string& fileName) {
     const std::string dir = logsDir(root, plugin);
     WIN32_FIND_DATAA found{};
@@ -364,11 +350,11 @@ inline void deleteInCharacterFolders(const std::string& root, const std::string&
     FindClose(find);
 }
 
-// A warning that repeats: said the first time a cause happens this session, then only counted.
+// Report each warning cause once per session; count repeats.
 class Repeats {
 public:
     bool first(const std::string& cause) { return ++counts_[cause] == 1; }
-    // The causes that happened more than once, with their totals; then forgets them all (at unload).
+    // Flush repeat counts at unload.
     std::vector<std::pair<std::string, unsigned>> take() {
         std::vector<std::pair<std::string, unsigned>> out;
         for (const auto& c : counts_)
@@ -381,21 +367,19 @@ private:
     std::map<std::string, unsigned> counts_;
 };
 
-// ---- the writer -------------------------------------------------------------------------------------------------------
+// Writer.
 
-// Lines are queued from any thread and written by one writer thread, so a slow share never holds up a frame.
-// Every file operation - the trim, a move to a character's log, the merge, the checks - runs on that thread,
-// in the order things were queued.
+// Serialize all file I/O on the writer thread to avoid stalling frames on a slow share.
 class FileLog {
 public:
     using Appender = bool (*)(const std::string& path, const std::string& text);
 
-    // Release stops the writer. At process exit the writer may be gone holding the mutex, so this neither locks nor joins.
+    // Do not lock or join at process exit: the writer may have died holding the mutex.
     ~FileLog() {
         if (writer_.joinable()) writer_.detach();
     }
 
-    // Where lines go before a character is known: the startup file. Lines written before start() are held.
+    // Buffer startup lines until start().
     void open(const std::string& root, const std::string& startupPath) {
         std::lock_guard<std::mutex> lock(mutex_);
         root_ = root;
@@ -403,13 +387,12 @@ public:
         merged_ = false;
         closedOld_ = false;
     }
-    // This run's session line (sessionText) and run: written again after a trim, and at a move with no startup file to merge.
+    // Reinsert the session header after trimming or switching without a startup log.
     void setSession(const std::string& text, const Run& run) {
         std::lock_guard<std::mutex> lock(mutex_);
         session_ = text;
         run_ = run;
     }
-    // Starts the writer thread. ChatLogFix calls it after its install pass; the others right after open().
     void start() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (running_) return;
@@ -419,13 +402,13 @@ public:
         const uint64_t generation = ++generation_;
         writer_ = std::thread([this, generation] { run(generation); });
     }
-    // Queues one line. After stop() it is written at once instead (one open, one write): nothing said at unload is lost.
+    // After stop(), write synchronously so unload messages are preserved.
     void write(const char* level, const std::string& text) { queue(stampLine(level, text)); }
-    // A diag report as one block: it reaches the file in one write.
+    // Write the diagnostic report as one block.
     void writeDiag(const std::string& who, const std::string& body) {
         queue(stampLine("info", "===== diag " + who + " =====") + body + stampLine("info", "===== end diag ====="));
     }
-    // The character is known (login, a switch, a load after login): from here on lines go to `path`.
+    // Queue a switch to the character log.
     void moveToCharacter(const std::string& path, const std::string& name) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (path == shown_) return;
@@ -437,7 +420,7 @@ public:
         shown_ = path;
         wake_.notify_all();
     }
-    // Runs `job` on the writer thread after what is queued so far (file work at load: old files, startup files).
+    // Queue file work after pending entries.
     void post(std::function<void()> job) {
         std::lock_guard<std::mutex> lock(mutex_);
         Entry e;
@@ -446,7 +429,7 @@ public:
         entries_.push_back(std::move(e));
         wake_.notify_all();
     }
-    // The file lines are going to, as chat names it: the new one from the moment a move is queued.
+    // Report the new path as soon as its switch is queued.
     std::string path() {
         std::lock_guard<std::mutex> lock(mutex_);
         return shown_;
@@ -455,34 +438,38 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return shown_ == startup_;
     }
-    // True once when writes have failed for 10 s; again only after a write has succeeded in between.
+    // Latch after 10 seconds of failed writes; reset after a successful write.
     bool takeWriteWarning() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (failSince_ == 0 || failWarned_ || GetTickCount64() - failSince_ < failWarnMs_) return false;
         failWarned_ = true;
         return true;
     }
-    // True once when the log is over 1.5 times its cap and could not be trimmed.
+    // Warn once if trimming fails and size exceeds 1.5 times the cap.
     bool takeTrimWarning() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!trimStuck_ || trimWarned_) return false;
         trimWarned_ = true;
         return true;
     }
-    // The writer thread's id (0 when none): each plugin's thread pause leaves it running.
+    // Writer thread ID, excluded from patch freezes.
     DWORD threadId() {
         std::lock_guard<std::mutex> lock(mutex_);
         return writer_.joinable() ? GetThreadId(writer_.native_handle()) : 0;
     }
-    // Writes what is queued and ends the writer, waiting at most `timeoutMs`. A file that will not open gets one last try,
-    // then what is left is dropped. False when the writer is still inside a file operation (a stalled share): it is
-    // detached and finishes by itself, so the caller keeps the DLL mapped.
+    // Drain and stop within timeoutMs, dropping failed writes after one final attempt.
+    // On timeout, detach; the caller must keep the DLL mapped.
     bool stop(DWORD timeoutMs = 2000) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!running_) return true;
             running_ = false;
             wake_.notify_all();
+        }
+        if (!writer_.joinable()) {   // start() threw before the thread existed: nothing to wait for, nothing to detach
+            std::lock_guard<std::mutex> lock(mutex_);
+            writerActive_ = false;   // so a line queued after this goes straight to the file, not into a queue nobody drains
+            return true;
         }
         if (WaitForSingleObject(writer_.native_handle(), timeoutMs) == WAIT_OBJECT_0) {
             writer_.join();
@@ -538,7 +525,7 @@ private:
         failWarned_ = false;
     }
 
-    // Appends one batch, trimming first. After a trim this run's session line goes in again, so every file holds it.
+    // Reinsert the session header after trimming.
     bool writeBatch(const std::string& path, const std::string& batch) {
         uint64_t cap, keep;
         std::string session;
@@ -561,9 +548,8 @@ private:
         return append(path, text);
     }
 
-    // The log moves to a character's file: a closing line in the character log it leaves, the
-    // unclean-end check, then in one write the note, the startup file's lines (or the session line) and the character.
-    // False when a write failed: the move is tried again whole at the next pass; the closing line is not written twice.
+    // Close the old character log and merge startup records into the new one.
+    // Retry failed switches without duplicating the closing record.
     bool move(const std::string& to, const std::string& name) {
         std::string from, startup, root, session, tag;
         bool merged, closed;
@@ -610,7 +596,7 @@ private:
         return true;
     }
 
-    // Writes the queued entries in order. False when a write failed: that entry and everything after it stay queued.
+    // On failure, retain the failed entry and all later entries for retry.
     bool drain(std::unique_lock<std::mutex>& lock) {
         while (!entries_.empty()) {
             if (entries_.front().kind == Entry::Job) {
@@ -661,7 +647,7 @@ private:
         return true;
     }
 
-    // `generation` is this writer's start: a writer that stop() gave up on sees a later one and leaves the queue to it.
+    // A detached writer must not consume a newer generation's queue.
     void run(uint64_t generation) {
         std::unique_lock<std::mutex> lock(mutex_);
         {

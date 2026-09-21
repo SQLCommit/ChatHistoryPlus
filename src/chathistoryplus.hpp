@@ -1,9 +1,4 @@
-/**
- * ChatHistoryPlus - raises how much chat history FFXI keeps.
- *
- * Native: 50 records per page x 20 pages = 1000 messages per chat window. This raises the
- * records-per-page figure, which multiplies the whole store.
- */
+// Increase the native history capacity of 50 records per page across 20 pages.
 #define HL(s) "\x11" s "\x12"
 
 #ifndef CHATHISTORYPLUS_HPP_INCLUDED
@@ -66,7 +61,7 @@ class chathistoryplus final : public IPlugin
     int  Stores(Store* out, int max);
     void Print(uint8_t colour, const char* fmt, ...);
 
-    // The log (plugin_log.h): one file per character, the diag report inside it.
+    // Per-character log.
     std::string m_Root;
     plog::Run   m_Run;
     std::string m_CharKey;

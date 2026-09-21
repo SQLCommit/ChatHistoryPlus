@@ -1,6 +1,4 @@
-/**
- * ChatHistoryPlus - see chathistoryplus.hpp.
- */
+// ChatHistoryPlus page storage and client hooks.
 #include "chathistoryplus.hpp"
 #include "chp_util.h"
 #include "plugin_log.h"
@@ -24,7 +22,7 @@ namespace
         const char* mask;
         size_t      len;
         Kind        kind;
-        uint32_t    knownRva;      // where it matched in the reference image (documentation only)
+        uint32_t    knownRva;      // reference RVA; scanning resolves the live address
         uint8_t     steal;         // K_SPLICE: bytes the detour takes
         int8_t      operandOff;    // K_DATAREF: offset of the absolute within the match
         uint32_t    off[2];        // K_DIVISOR: imm32 offsets from the match, 0xFFFFFFFF = unused
@@ -41,7 +39,7 @@ namespace
     const uint8_t s_recount[] = { 0x53,0xC6,0x81,0xC8,0x00,0x00,0x00,0x00,0x33,0xD2 };
     const uint8_t s_freeblob[] = { 0x53,0x56,0x8B,0xF1,0x33,0xDB,0x8B,0x86,0xCC,0x00,0x00,0x00 };
 
-    // Anchored to the FUNCTION, not per-site
+    // Function anchors for records-per-page constants.
     const uint8_t d_a[] = { 0x81,0xEC,0x00,0x01,0x00,0x00,0x56,0x8B,0xF1,0x8A,0x4E,0x54 };
     const uint8_t d_b[] = { 0x56,0x8B,0xF1,0x57,0x8B,0x4E,0x0C,0x8A,0x41,0x60 };
     const uint8_t d_c[] = { 0x53,0x56,0x57,0x8B,0xF9,0x8B,0x4F,0x0C,0x8A,0x41,0x60 };
@@ -83,7 +81,7 @@ namespace
     const char HL_ON  = '\x11';
     const char HL_OFF = '\x12';
 
-    // -- signature scanning -----------------------------------------------------------------------
+    // -- signature scanning
 
     bool scan_span(const uint8_t* lo, uint32_t span, const Sig& s, SigResult* r)
     {
@@ -141,7 +139,7 @@ namespace
         out.rva = (out.hits == 1) ? static_cast<uint32_t>(out.at - m.base) : 0;
     }
 
-    // -- resolved addresses -----------------------------------------------------------------------
+    // -- resolved addresses
 
     struct Addrs
     {
@@ -194,9 +192,8 @@ namespace
         g_chLockInit = true;
     }
 
-    // Every detour body runs under the lock and counts itself in flight. While the plugin is off (never on, being
-    // turned off, or a splice that could not come out) a detour hands the call to its trampoline, which runs the
-    // stolen bytes and continues in the client's own function: the original behaviour, whatever else is going on.
+    // Detours hold the lock and increment the in-flight count. While disabled, forward through
+    // the trampoline so retained hooks preserve native behavior.
     struct DetourGuard
     {
         DetourGuard()  { InterlockedIncrement(&g_chInflight); EnterCriticalSection(&g_chLock); }
@@ -304,7 +301,7 @@ namespace
     inline void  ch_del(void* p)  { reinterpret_cast<fn_del>(g_a.opfree)(p); }
     inline void* ch_mgr(void)     { return reinterpret_cast<void*>(ch_r32(g_a.fmgr)); }
 
-    // -- the seven replacements -------------------------------------------------------------------
+    // Page-method replacements.
 
     void __fastcall ch_freeblob(void* self, void* edx)
     {
@@ -543,7 +540,7 @@ namespace
         reinterpret_cast<void(__fastcall*)(void*, void*)>(g_chTramp[1])(self, edx);
     }
 
-    // -- splice mechanics --------------------------------------------------------------------------
+    // -- splice mechanics
 
     bool ours(uintptr_t addr, int steal, const void* detour)
     {
@@ -555,9 +552,8 @@ namespace
         return true;
     }
 
-    // A trampoline for one entry: the stolen bytes, then a jump back. Allocated before anything is written into the
-    // client. Only a clean unload frees it (Release): by then every entry is back, put back with no thread inside a
-    // trampoline and none in a detour, and no stolen instruction is a call, so no thread holds a return into one.
+    // Allocate trampolines before patching. Free only after quiet removal of every entry and detour.
+    // Stolen instructions contain no calls, so no thread can retain a return into them.
     void* make_tramp(uintptr_t addr, int steal)
     {
         uint8_t* t = static_cast<uint8_t*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -570,8 +566,7 @@ namespace
         return t;
     }
 
-    // Raw byte writes into client code, for use with every other thread suspended (whenNoThreadIn): no allocation, and
-    // the result is read back. The caller has already checked what is there.
+    // Write and read back under a freeze; no allocation. The caller verifies ownership first.
     bool write_code(uintptr_t addr, const uint8_t* bytes, int n)
     {
         uint8_t* target = reinterpret_cast<uint8_t*>(addr);
@@ -616,8 +611,7 @@ namespace
         memcpy(out, sites, sizeof(sites));
     }
 
-    // The spans no other thread may be in while the entries change: this DLL, the eight entries, their trampolines and
-    // the six divisor instructions. Returns the count written to `out` (at most 32).
+    // Freeze this DLL, eight entries, their trampolines and six divisor instructions.
     size_t ch_ranges(const Site* sites, chp::CodeRange* out)
     {
         size_t n = 0;
@@ -640,8 +634,7 @@ namespace
         return n;
     }
 
-    // Drops every stored page of `st` (the stock engine cannot read a page written at 140, and one rotated at 50 under
-    // 140 divisors is indexed wrongly) and sets the iterator's total to what the live page holds. Returns the pages dropped.
+    // Discard incompatible stored pages and set the iterator total to the live-page count.
     int ch_drop_pages(const Store& st)
     {
         int cleared = 0;
@@ -655,10 +648,7 @@ namespace
         return cleared;
     }
 
-    // Pins this DLL: it stays mapped until the game closes, so nothing the client still points at (an entry JMP, a
-    // detour a thread is inside) can ever reach unmapped memory. Windows has no way back out of a pin, so it is the last
-    // thing the plugin does, not the first: Release pins only when an unload leaves something of the plugin in the client,
-    // or its log writer is still finishing a file. A clean unload stays unpinned, so the next /load maps the DLL fresh.
+    // Pin only when unload leaves hooks or a writer alive; a clean unload must allow a fresh DLL.
     bool ch_pin(void)
     {
         if (g_chPinned) return true;
@@ -668,9 +658,7 @@ namespace
         return g_chPinned;
     }
 
-    // -- adoption ---------------------------------------------------------------------------------
-    // adopt=true  : copy each live page's native 50-entry table into its shadow (install)
-    // adopt=false : write the shadow's first 50 entries back and clamp the count (remove)
+    // Adopt native page indices on install; compact the newest fitting records on removal.
     int ch_adopt(const Store& st, bool adopt)
     {
         uintptr_t list[CH_MAX_PAGES + 1];
@@ -709,8 +697,7 @@ namespace
                 const uintptr_t data = ch_r32(page + PGF_DATA);
                 const uint32_t  osz  = ch_size(page, s);
 
-                // The stock table holds 50 SIGNED 16-bit offsets, so the newest records are kept only as far as every
-                // offset and the size stay under 0x8000: a record can be 2 KB, and 50 of them need not fit.
+                // Keep the newest records that fit 50 signed 16-bit offsets and a total size below 0x8000.
                 uint32_t lens[CH_MAX_N];
                 for (int k = 0; k < live; ++k)
                 {
@@ -752,8 +739,7 @@ namespace
                 }
                 else
                 {
-                    // No room for the packed copy (the process is out of address space): hand back an EMPTY page
-                    // rather than a count with no text behind it, the size word included (stock reads it as signed).
+                    // If packing allocation fails, return an empty page with a zero size.
                     if (data >= 0x10000) reinterpret_cast<fn_fblob>(g_a.freeblob)(reinterpret_cast<void*>(page), nullptr);
                     ch_w32(page + PGF_DATA, 0);
                     ch_w32(page + PGF_CAP, 0);
@@ -772,13 +758,11 @@ namespace
     }
 }
 
-// ------------------------------------------------------------------------------------------------
 
 chathistoryplus::chathistoryplus(void)
     : m_Core(nullptr), m_Id(0), m_Base(0), m_ImgStamp(0), m_Resolved(false), m_Want(0)
 {
-    // No global is touched here: on a pinned image a refused second instance runs this constructor while the live
-    // detours still use g_a (Initialize resets the globals only once the sole-instance check has passed).
+    // Do not reset globals here: a refused instance may share the pinned image with live detours.
 }
 
 void chathistoryplus::Print(uint8_t colour, const char* fmt, ...)
@@ -859,7 +843,6 @@ void chathistoryplus::Log(bool warn, const char* fmt, ...)
     g_chLog.write(warn ? "warn" : "info", buf);
 }
 
-// Chat only: the usage lines, and the unload line (the log has it in its own words, with the run tag).
 void chathistoryplus::Chat(uint8_t colour, const char* text)
 {
     IChatManager* cm = (m_Core != nullptr) ? m_Core->GetChatManager() : nullptr;
@@ -880,7 +863,6 @@ void chathistoryplus::Chat(uint8_t colour, const char* text)
 }
 
 std::string chathistoryplus::LogShown(void) { return plog::underRoot(m_Root, g_chLog.path()); }
-// A refused load never moves its startup file, so it gets no "moves".
 const char* chathistoryplus::LogNote(void) { return (!m_Refused && g_chLog.atStartupFile()) ? " (it moves into your character's log at login)" : ""; }
 
 void chathistoryplus::DiagBegin(void)
@@ -889,7 +871,6 @@ void chathistoryplus::DiagBegin(void)
     m_DiagText.clear();
 }
 
-// The report goes into the log as one block; chat says where.
 void chathistoryplus::DiagEnd(void)
 {
     m_Diag = false;
@@ -900,7 +881,6 @@ void chathistoryplus::DiagEnd(void)
     Print(k_colInfo, "Diagnostics written to " HL("%s") "%s.", LogShown().c_str(), LogNote());
 }
 
-// The character this client is playing (login status 2, party slot 0): a new one moves the log.
 void chathistoryplus::FollowCharacter(void)
 {
     if (m_Core == nullptr) return;
@@ -1128,8 +1108,7 @@ void chathistoryplus::Status(void)
 
     if (ns == 0) { Print(k_colWarn, "No chat store is reachable right now."); return; }
 
-    // Each window keeps its own copy of the same history, so two identical rows read as a total.
-    // Collapse them; print both only when they differ, which means the windows are filtered apart.
+    // Collapse identical per-window counts; report both when filtering makes them differ.
     const int tot0 = st[0].pages * n + st[0].liveCount;
     const bool same = (ns == 2) && (st[1].pages * n + st[1].liveCount) == tot0;
     if (same)
@@ -1189,7 +1168,7 @@ void chathistoryplus::Probe(void)
                        (live < 0x10000 || safe_r8(live + PGF_COUNT, &lcnt));
         // Blob bytes, not just record count
         uint16_t lsz = 0; uint32_t lcap = 0;
-        // The TRUE size lives in the shadow
+        // The shadow holds the full buffer size.
         uint32_t ltrue = 0;
         if (e && live >= 0x10000)
         {
@@ -1315,17 +1294,13 @@ bool chathistoryplus::Enable(void)
     memset(const_cast<uint32_t*>(g_chHit), 0, sizeof(g_chHit));
     memset(const_cast<uint32_t*>(g_chFail), 0, sizeof(g_chFail));
 
-    // One pass with every other thread stopped and none of them inside an entry, a trampoline, a divisor instruction
-    // or this DLL: adopt the live pages into the shadows (reads only), write the eight jumps and the six divisors, and
-    // switch on. A site that no longer holds the bytes resolved (another tool got there first) aborts the pass with
-    // everything written so far put back, so nothing is ever half published. Nothing here allocates.
+    // Under one quiet freeze, adopt live pages, install entries/divisors and enable detours.
+    // Recheck ownership and roll back all writes on failure. No allocation.
     chp::CodeRange ranges[33];
     size_t nr = ch_ranges(sites, ranges);
     {
-        // At install the stock page methods are still running as themselves: a thread inside one of their bodies would
-        // finish a stock append against the native table after the shadows were adopted, and that record would be lost.
-        // The eight page methods sit together just below the first divisor function on every build seen, so that whole
-        // span is watched too. (A thread inside a callee of a body, the allocator or file I/O, is still not seen.)
+        // Also freeze the native page-method bodies to avoid losing an append after shadow adoption.
+        // Calls already inside allocators or file I/O are outside these checked ranges.
         uintptr_t lo = sites[0].addr;
         for (int i = 1; i < 8; ++i) if (sites[i].addr < lo) lo = sites[i].addr;
         const uintptr_t hi = g_res[SI_DIV_A].at;
@@ -1343,8 +1318,7 @@ bool chathistoryplus::Enable(void)
         int written = 0;
         for (; written < 8; ++written)
         {
-            // The entry must still match its signature, the same test Resolve passed at load: a hook that arrived
-            // since (a JMP or CALL in the stolen bytes) would be copied into the trampoline unrelocated.
+            // Recheck entry signatures so a later hook is not copied into an unrelocated trampoline.
             const Sig& sig = k_sigs[written];   // SI_CTOR..SI_FREEBLOB are the sites' order
             const uint8_t* live = reinterpret_cast<const uint8_t*>(sites[written].addr);
             bool matches = live[0] != 0xE9 && live[0] != 0xE8;
@@ -1401,11 +1375,8 @@ bool chathistoryplus::Enable(void)
     return true;
 }
 
-// Turns the plugin off and puts the client back. Data first, under the lock (no detour body runs meanwhile, and every
-// page method still goes through a detour, so nothing reads the native tables half converted); then the code, in one
-// pass with the other threads stopped and none of them inside an entry, a trampoline or this DLL. Once `g_chOn` is
-// false a detour that gets in hands its call to the trampoline, so a splice left behind (foreign bytes, a pass that
-// never got its quiet moment) is harmless: Release pins the DLL for it, and the client runs its own code through it.
+// Convert pages under the detour lock, then restore code under a quiet freeze.
+// After disabling, retained detours pass through; Release pins the DLL if any remain.
 bool chathistoryplus::Disable(void)
 {
     ch_lock_init();
@@ -1420,8 +1391,7 @@ bool chathistoryplus::Disable(void)
     int back = 0, cleared = 0, was = g_chN;
     if (g_chOn)
     {
-        // A divisor that no longer reads ours belongs to another tool now: converting the pages to the stock layout
-        // under a foreign divisor would be the worst state available, so the plugin stays on instead.
+        // Do not convert pages under a foreign divisor; retain the active plugin.
         for (int i = 0; i < 6; ++i)
             if (g_chDivPoked[i] && *reinterpret_cast<const uint32_t*>(g_a.div[i]) != static_cast<uint32_t>(was))
             {
@@ -1433,8 +1403,7 @@ bool chathistoryplus::Disable(void)
         Store st[4];
         const int ns = Stores(st, 4);
         for (int i = 0; i < ns; ++i) back += ch_adopt(st[i], false);
-        // The stored pages go (stock cannot read them), and iter+0x08, the store's total, becomes what the converted live
-        // page holds now.
+        // Drop incompatible stored pages and update the total from the converted live page.
         if (g_chN > 50)
             for (int i = 0; i < ns; ++i) cleared += ch_drop_pages(st[i]);
         for (int i = 0; i < CH_SHADOWS; ++i) g_chSh[i].page = 0;
@@ -1459,8 +1428,8 @@ bool chathistoryplus::Disable(void)
         }
         if (divisorsStuck)
         {
-            // Stock entries with a 140 divisor would index past the 50-entry table: put the divisors back to ours and
-            // keep the entries; the plugin goes back on (below) over the now stock-layout pages.
+            // If removal fails, restore our divisors and re-enable detours before stock tables can be
+            // misindexed.
             for (int i = 0; i < 6; ++i)
                 if (!g_chDivPoked[i] && *reinterpret_cast<const uint32_t*>(g_a.div[i]) == g_chDivOrig[i] && poke32(g_a.div[i], static_cast<uint32_t>(was)))
                     g_chDivPoked[i] = true;
@@ -1498,13 +1467,12 @@ bool chathistoryplus::Disable(void)
             }
     if ((!ran || divisorsStuck) && was > 50)
     {
-        // Back on, over pages now in the stock layout (a valid install state): the detours must own them again.
+        // Re-adopt the converted stock-layout pages.
         EnterCriticalSection(&g_chLock);
         Store st[4];
         int ns = Stores(st, 4);
-        // While the detours passed through, a worker thread's append may have rotated a full 50-record page into the
-        // store: under 140 divisors that page is indexed wrongly (the state Enable refuses), so it goes the way the
-        // stored pages went, and the total follows the live page.
+        // Discard any native page rotated into storage while detours passed through; our divisors cannot
+        // index it.
         int rotated = 0;
         for (int i = 0; i < ns; ++i) rotated += ch_drop_pages(st[i]);
         if (rotated) ns = Stores(st, 4);
@@ -1566,8 +1534,7 @@ void chathistoryplus::Tick(void)
     for (int i = 0; i < ns; ++i)
         if (st[i].pages != 0)
         {
-            // A page already closed at 50 records: it can only switch over at the next login (README, "Why it only
-            // switches at login"). Said once, so a load partway through a session does not look like it is on.
+            // A stored 50-record page prevents enabling until next login. Report once.
             if (!m_ToldArmed)
             {
                 m_ToldArmed = true;
@@ -1618,8 +1585,7 @@ bool chathistoryplus::Initialize(IAshitaCore* core, ILogManager* logger, uint32_
     g_chLog.setSession(session, m_Run);
     g_chLog.write("info", session);
     g_chLog.start();
-    // One copy per client. A clean unload lets the lock go, so /load works again (a new build included). An unload that
-    // left something in the client pins the DLL and keeps the lock: a fresh copy could not tell what that image owns.
+    // Keep the instance lock if unload retains client hooks. A clean unload permits a new DLL.
     const std::string name = "Local\\chathistoryplus-sole-instance-" + std::to_string(GetCurrentProcessId());
     m_SoleInstance = CreateMutexA(nullptr, TRUE, name.c_str());
     if (m_SoleInstance == nullptr || GetLastError() == ERROR_ALREADY_EXISTS)
@@ -1657,8 +1623,7 @@ void chathistoryplus::Release(void)
     if (m_Refused) return;
     m_Want = 0;
     Disable();
-    // Anything of the plugin's still in the client (an entry or a divisor that could not come out, or the plugin still
-    // on) can lead a thread into this DLL, so it stays mapped until the game closes.
+    // Pin while any remaining entry, divisor or active detour can reach this DLL.
     bool left = g_chOn;
     for (int i = 0; i < 8; ++i) left = left || g_chInst[i];
     for (int i = 0; i < 6; ++i) left = left || g_chDivPoked[i];
@@ -1670,19 +1635,17 @@ void chathistoryplus::Release(void)
     }
     Log(false, "unloaded%s%s", left ? "; some of its changes stay in, so the DLL stays mapped until the game closes" : "",
         plog::runSuffix(m_Run).c_str());
-    // The writer stops last. A stalled share keeps it past 2 s: it finishes by itself and the DLL must stay mapped.
+    // Stop the writer last; pin if it exceeds the two-second timeout.
     if (!g_chLog.stop()) ch_pin();
     if (g_chPinned)
     {
-        // A pinned image keeps its state for the rest of the session: the lock stays with it, so another load is refused.
         if (m_Core != nullptr)
             Chat(k_colInfo, "Unloaded; it stays in memory until the game closes, so restart the game to load "
                             "ChatHistoryPlus again.");
     }
     else
     {
-        // Clean: Disable put every entry back with no thread inside a trampoline and none in a detour, so nothing can
-        // reach this DLL, the trampolines or the lock any more. They go, and the next /load maps the DLL fresh.
+        // Quiet removal leaves no references to trampolines or the lock; release them for a clean reload.
         for (int i = 0; i < 8; ++i)
             if (g_chTramp[i] != nullptr) { VirtualFree(g_chTramp[i], 0, MEM_RELEASE); g_chTramp[i] = nullptr; }
         if (g_chLockInit) { DeleteCriticalSection(&g_chLock); g_chLockInit = false; }
@@ -1756,9 +1719,7 @@ bool chathistoryplus::HandleCommand(int32_t mode, const char* command, bool inje
     }
 }
 
-// ------------------------------------------------------------------------------------------------
-// Ashita plugin entry points (see src/exports.def).
-// ------------------------------------------------------------------------------------------------
+// Plugin entry points.
 extern "C"
 {
     __declspec(noinline) IPlugin* __stdcall expCreatePlugin(const char* args)

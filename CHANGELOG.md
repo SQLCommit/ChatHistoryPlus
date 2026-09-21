@@ -1,18 +1,22 @@
 # Changelog
 
-## 1.2
+[Back to ChatHistoryPlus](README.md)
+
+## v1.2
 
 ### Logs
+
 - **One log per character**, `logs\chathistoryplus\<Name>_<id>\chathistoryplus.log`; lines from before login move into it at login.
 - **Several clients can share one Ashita folder** without losing or overwriting each other's lines (reported by
   Fel-FFXI, ChatHistoryPlus pull request #1).
-- **Each log keeps its newest 1 MB**; no `.old` files.
+- **Each log keeps its newest 1 MB**.
 - **`diag` writes its report into your character's log** instead of a separate file.
 - Every failure says so once in chat and names the log.
 - A load writes one line for the 13 signatures instead of the whole table (the table is in `diag`, and in the log whenever one fails).
 - The update deletes the old files: `logs\chathistoryplus\chathistoryplus.log`, `logs\chathistoryplus\chathistoryplus.log.old` and `logs\chathistoryplus_diag.log`.
 
 ### Unloading and safety
+
 - **`/unload` then `/load` works in the same session, a new build included.** Unloading takes every change back out,
   and only then does ChatHistoryPlus leave memory, so nothing can jump into an unloaded copy. If something could not be
   put back, it stays in memory until the game closes, and a `/load` before then is refused.
@@ -29,7 +33,7 @@
 - The thread pause skips threads that have already exited. One kept alive by another handle used to make every pause
   fail, so ChatHistoryPlus never switched on.
 
-## 1.1
+## v1.1
 
 - A record is one wrapped display line, and a single one can reach 2,047 bytes because colour codes
   cost bytes but no screen width. 140 of them do not fit a size the client tracks in a signed 16-bit
@@ -41,6 +45,6 @@
 - Unloading now compacts the records it keeps to fresh low offsets. The native table is 16-bit, so an
   offset above 32,767 cannot be handed back at all.
 
-## 1.0
+## v1.0
 
-Initial Release
+Initial release.

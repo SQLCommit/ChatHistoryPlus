@@ -94,7 +94,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Build and package
+      - name: Check release README conversion
+        shell: pwsh
+        run: ./tools/.github/scripts/test-release-readme.ps1 -Root ./release
+
+      - name: Build and package with readable README
         id: package
         shell: pwsh
         working-directory: release

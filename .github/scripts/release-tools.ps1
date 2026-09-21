@@ -2,6 +2,7 @@
 # parts are .github/release.json and .github/scripts/build.ps1. Works in Windows PowerShell 5.1 and PowerShell 7.
 Set-StrictMode -Version 3
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'readme-tools.ps1')
 
 function Get-ReleaseConfig {
     param([string]$Root = '.')
@@ -113,10 +114,14 @@ function New-ReleasePackage {
     $zipName = "$($Cfg.name)-v${Version}_Interface-$Interface.zip"
     $zipPath = Join-Path $outPath $zipName
     $entries = New-Object System.Collections.Generic.List[object]
+    $readmes = @{}
     $entries.Add(@($Dll, "plugins/$($Cfg.dll)"))
     foreach ($doc in $Cfg.docs) {
         $src = Join-Path $rootPath $doc
         if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "$doc (listed in .github/release.json) is not in the repository." }
+        if ((Split-Path $doc -Leaf) -ieq 'README.md') {
+            $readmes[$src] = ConvertTo-ReleaseReadme ([IO.File]::ReadAllText($src))
+        }
         $entries.Add(@($src, "docs/$($Cfg.docsFolder)/$(Split-Path $doc -Leaf)"))
     }
     $extras = if ($Cfg.PSObject.Properties.Name -contains 'extras') { @($Cfg.extras) } else { @() }
@@ -137,7 +142,13 @@ function New-ReleasePackage {
     $zip = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
     try {
         foreach ($e in $entries) {
-            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $e[0], $e[1], [IO.Compression.CompressionLevel]::Optimal)
+            if ($readmes.ContainsKey($e[0])) {
+                $entry = $zip.CreateEntry($e[1], [IO.Compression.CompressionLevel]::Optimal)
+                $writer = New-Object IO.StreamWriter($entry.Open(), (New-Object Text.UTF8Encoding($false)))
+                try { $writer.Write($readmes[$e[0]]) } finally { $writer.Dispose() }
+            } else {
+                [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $e[0], $e[1], [IO.Compression.CompressionLevel]::Optimal)
+            }
         }
     } finally { $zip.Dispose() }
     Remove-Item -LiteralPath $info

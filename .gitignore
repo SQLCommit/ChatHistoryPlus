@@ -17,3 +17,16 @@ dist/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local development and announcement files
+/tools/
+/tests/
+/DISCORD_POST.md
+/DEV_TRACKING.md
+*.bak
+*.tmp
+*.log
+*.png
+*.jpg
+__pycache__/
+*.pyc

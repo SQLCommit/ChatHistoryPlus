@@ -1,147 +1,94 @@
-# ChatHistoryPlus v1.2 - A Bigger Native Chat Log for Ashita v4
+<div align="center">
 
-Raises how much chat FFXI keeps, from 1000 messages per window to **2800**.
+# ![ChatHistoryPlus](https://readme-typing-svg.demolab.com/?font=Cinzel&size=48&duration=900&pause=0&color=C49B53&center=true&vCenter=true&repeat=false&width=600&height=78&lines=ChatHistoryPlus&letterSpacing=2px&weight=700)
 
-## Why this exists
+**Keep more of the conversation.**
 
-FFXI stores chat as **pages of 50 records, 20 pages per chat window**. That is 1000 messages, and
-once the twenty-first page is needed the oldest one is discarded.
+[![Final Fantasy XI](https://custom-icon-badges.demolab.com/badge/Final_Fantasy-XI-90703D?style=flat-square&logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAADAFBMVEUAAABAMDBQODhgQDhYQEBQSFBoSEBgSEBoSEhgSEhoSEBoSEBgSFBoSEhoSEBwSDhoSEBoSEhoSEBoSEBwSDhgUFBoUEh4SDh4SEBwUFB4UECASDhoUFhwUEhgWGBwUFB4UEh4UEhgWGBwWFiAUEh4UFBoWGBoYGCIUEiAWFBwYGB4WFiAWFCIWEhwYGB4WFiAWFiAWFiIWFCAYFhwYGiAYFiQWFB4YGh4YGCAYGCQWFiQYFB4aGiIYFiYWFiIYGiIYGCIYFB4aGiQYFiAaGiIYGCYYFiYYFCIaGiQYGCYYFiAaGiQaGCQaGCYYGCgYFCQaGCYaGiYaFiIcGigYFB4cHCQaGCIaGiYaGigaFCYaHCgaFiYaGCIcHCQcGigaGi4YFCAeICoaGCIeHiIeHCgcGCYcHCoaHCgaHCAeICgcGCoaGCwaFigcHCIeHiQeHCYeHCQeHCgcHCwaGiIgICYeHCYeHCwcHCQgIC4aGi4cFiocHigeHCoeGC4cFiYeHi4cFjAaGioeHCQgICYgHigeHiYgICweHi4eGCogHC4cHiweHC4eGCggICggHiYiICYiICwgHCYgIC4eICgiICogIDAeICYiIi4gIDIeHCgiIi4gHDQeGCgiIiwgHi4gHCwiICoiICokICgkIi4gHigkIioiIigkJDAiHjgeHCwiIiokIi4iIC4iHjIiHi4iIDIiHiwkIC4kHiomJCokJDAiICwkIjAkIDAkIDAkIComJCwmIjAkIDIkIC4kIjogIDIkIi4mJCwmJi4mJC4mJDogIiwmJjgkIDQmJC4oKDAoJC4oJjAoJDImJC4oKDokJC4qKDAoJjQmJjwkIjIoJDAoKDokJjQqJjAqKjIqKDIqKDQqKDIsKjIsKjgoJjIsKjQsKjIsLDIsKjQsKjgsKjQuKjIwLjYuLDQuLjosKjYuLDYuLDYuLDguLDYwLjQyMDYyLjoyLjoyMDg0Mjg0Mjg0Mjo0Mjo2NDg2Njw2Mjw2NDw4ODw4ODw6Oj4%2BPD4%2BPg4jpSBAAAAAXRSTlMAQObYZgAAAphJREFUeJxjYMABOubX1XVU4ZB8dv%2FumddPn3%2F%2Bik1BVc%2BVVx9%2B%2Ffn7%2Fd37Hx%2BxKWi4fvPvv99flhzccvLYLSwKGq7fOvbzx4vNU9oWTzm0EFNB5PXHh3p%2Ff7vYNqmtvr6%2BFENB5L7HN%2BZufv%2FlxvLVffVlEydgyG989PDY5i%2BZwRcPblk96WFnAZq8e9btG7t63yV7ZNccvHj64bI1O9EUWB95e6j38SwXL3%2F%2FtFMPP124vQFVXrfgzsnewxdcDP2t%2FLVTfr588eAEiry04%2BFjCzffCpa3MrTSVmuZUnPnzSUUeaOFq3sPP%2FYRdTVUVVbL2%2BzTt%2BfAXiR5Tr55Zyt63y00lClWlFc22dUb27ljBbIBXE33Znm%2FeGJr31ipKK9%2BqDmxb83WHCR5JofebT7Lr86096z0U9TeMjfPp3P7WiR5RvbevOQpW7Qt7Isrk6xWrU4ujJtXi6xfYk1FaN7JVh7z9JXOdt6HUya1dAe5Iylgnr06MfTk%2BvSj6el%2BtmHbeqeevxyji2xB6rIKk8WrDKuv7XeWlJxVOLV1YqqCGJIFboenOx1abKWWe77RSjMlz8Ym3EcYWb7g3tTe3lOW8R6TLSIELZq1tGzCVQSQg3Dhwl7LU92W0yZHxScpt%2Bmph3sESIkhKyid1Lfcx6e8Kzcq3i%2FWUs1jBooFQAWHt%2B2KZeUJbM%2FwjJ%2BVZuKdFibLy4Cq4PQCbVHb9PjzrnFFRblx2gZcKPIMjDePW%2FHwRAQqa66aZKPlra3Pwomm4IGPoKS8c4Sq51QTJSUtS25UC4ARvfScjqQOh7xXvbeWkpyeMRsDOuAUX6TDoaNTH6wsE6vuy4whz8DJKbLdLGFdv4ug6JLZGpjyICX8B%2BbszjcVEjLDlAcA2agImHWK4wMAAAAASUVORK5CYII%3D)](https://www.playonline.com/ff11us/)
+[![Ashita interface 4.30](https://custom-icon-badges.demolab.com/badge/Ashita_Interface-4.30-536B91?style=flat-square&logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAGsklEQVR4nKxXf1CT9xl%2F8uYlgQoEXQyZhhJcqhxER4GmeHaacWttL0zwDsesbvaGzA1qtbc71ul2Z%2BvqfsnuWrubG1A9Zepg0tOeug5bZLGCJhIQKdKABAgSzI83P8mbvG%2Fy7N502PWWkFD6ufv%2BkXyf7%2Ft9vs%2Fz%2BX6%2Bz0MgIixm6PV6fkVp6a6nBCkt%2BalpDdXV1Ws8Hk%2FC6xe1%2BdDQEKGWrjht2LwFTaUa%2FLt8De54TDSt0WjWfiUOjI2N8RobGx%2BjKCrq%2FP59%2Bwou5BdhUNeLvtd%2Fi%2Fc3bsa3ln4ds%2Fhkk9FoTMgBAubBK3vrXnQ5naZvq9W%2F3L17d1FLS0sKy7KP5h9aLBKCYYA%2B9BsI9ejAGwjCLIZBRPBlZrN53m%2FPIabRuXPnxB63o%2FBnr%2B5frr99%2B%2FDBgwf1drvdoNFoiuacyFEoBtsfTLibBwygNY3ClZFhoDEM99lgv0KhCCfiABlr4t13m8sbGhr2T09NgKXzMgw9cMDL9QfX2KzWJrVafVQikaz1%2BXwpxmXpI5TdWuh2u8EeYsMXZz3X1peWHrPZbDyZTIbxHOBFiBAF27dvX3%2F0d4dv0IN3YQUwYOjphswf1IIwORkkEgkIBIKInV6vB7FYDEfefNPZ1Nx8pKCgILukpEQ1NWX2OByOt6qqvt8lk8lmKyoqmKgbxSJHXV3dN2csFqQutyH9QTuyM1MYDzqdjnE6nXjpzGkc6LiEw%2Fc%2Bwfb28wEej3d4cnJyYSSkaRotlmnwIAH8nCeAL1kRL5pQXFxMEiEWnqCmgDc%2BAt%2FIlgM%2F5IVVq1bpZTJZ1DUxHSgpKRn507E%2FmjLylEDKV8fdfA5py74G8vUbIT01FcIhFvoHR%2F3BAJ3V19fHW5ADO3funL0zaPzRL37fMA1JgoQd4MBLXwqhtAwghALIXf14it%2FvJ8VicXSyzScSAwMDUFtbe4PLbygUisuBOYQoO2KAxsNvHHJJpdLqzs5OQaw9Yl5DDj09PcmpqamZEGDh3x9r4aHNCiqVCqRSKbhcLsjMzIy67or2Wujs31omL17uaLhxo%2FuEUqmMrQmxPDMYDKBSFbd7XU7ECQrRQ0dO5%2FV6sWXHARwufA1NV29FImOxWJBl2UcRKCsr%2B2jPnj3LjUYj70u%2FBQzDgFKprDSNjX4hvC6XC99J24zvLdmKo%2B9fR6vVinfu3MHW1taIMz6fD0Ui0R%2BsVmtCb0HMFJAkyYkNcfN6hy%2Fr8eolBPGZKZ8gIPMnz8KSGRqyNz8N%2FCQyIkRrM3MAfAwcbzweLCgouMD9lwii3gLu9Fu%2BW6bisczy%2Btde%2F9gyaXw0p732IYgUSZD98zKwOWyfLxKSgLwwFBcqyZGRkfiiMR8HDAYDb%2BtThbqP3nk7dOb4n91btzzvtVomIynglO7US9uws70twofPEUYm4EX1pm8Nb9iwYd2i6oGhoSF4bl3eBUf%2FbQwxTCTv17WdSHvtGPQ7ccw48Nl1YwOR3x77OP7r4ml84bmNE8uWLT3S3d0dl3zzSnFubi4sX%2Ftk%2FdHTTePhcBDS09NhwzNquD8%2BDW5vAFZmZUNwlgKP0wa9hj74y1%2FPwfk3PgBmhvakC4SsyWSa93rHTcHcLcjPyf1pQ%2F0BDPpdSFEUXtd2Ie2zxxQgv9mMZw7UswKS%2F6vp6enFVURcsblySvTjsWOjsPfFPUAQBGStlALBT%2FqCXTAYANuDT8Excx%2BudnXA2UuX7JJMaS8nVouKwCt1ewu3Cb8TrE4pZ3%2B4qXIe3WXx1ZqXMIlPGjTCZ9wZooz9XC25KA5wGLh7V2CQmSrfE2qrWUnAHGYDUe2CfifkrVOE8pT5%2B3oEg4c2qTd1yOXyuJVQ3AhotVoel8e2tjaisuL5u56Hn%2F7f4VmGRmrKgPapQczPy2vctWuXUKfTLajXiGvAVTKr5FnnbaYedFkGkfbakKHd6HdbkDL3omPiFvqoCezv7w8UFRXVcr3CQhyIWRP%2BL9Rqtfp75eor2ys1ydEteEAK02B80sZu21FdOXTv3oVEM5BQ7X7y5Mmut4%2Bfren9xMySySKw2ii43TcYbj71D2ps3AyIYWADbsgIO0m35cELJpMp0f0Tb820Wi2%2FpqbmZjjEoGPiJqqK1nVVVVXlKBSKCpEo7derFfKmZ59%2BsjeJJF%2BO1Ul9KQ7MDb%2FfDyWqwlPuh8M43PtPFIvFNZxYzYkW14qdOHEiWavVkgvhQMKS6fV6gaYcKbdaW6Hp%2FasTGo3mQ%2B7Jhv8%2B3QqFght04rFfYAq4U2o0GqVQKKwtLy%2FPS1Rq443%2FBAAA%2F%2F%2BWk28F7WDfcAAAAABJRU5ErkJggg%3D%3D)](https://www.ashitaxi.com/)
+[![MIT License](https://custom-icon-badges.demolab.com/badge/License-MIT-90703D?style=flat-square&logo=law&logoColor=white)](LICENSE)
 
-The records-per-page figure is a constant in the client, in six places:
+[![Download](https://custom-icon-badges.demolab.com/badge/Download-8A652F?style=for-the-badge&logo=download&logoColor=white)](https://github.com/SQLCommit/ChatHistoryPlus/releases/latest)
+[![Changelog](https://custom-icon-badges.demolab.com/badge/Changelog-456487?style=for-the-badge&logo=history&logoColor=white)](CHANGELOG.md)
+[![Report an issue](https://custom-icon-badges.demolab.com/badge/Report_an_issue-596573?style=for-the-badge&logo=issue-opened&logoColor=white)](https://github.com/SQLCommit/ChatHistoryPlus/issues)
 
-```
-mov  r32, 50        ->        mov  r32, 140
-```
+</div>
 
-Raising it multiplies the whole store, because the page count does not change - 20 pages of 140 is
-2800 messages per window. The plugin also has to carry the widened pages itself, which is the part
-that is not one byte; see [How It Works](#how-it-works).
+---
 
-## Requirements
+<p align="center">
+ChatHistoryPlus increases FFXI’s native chat history from 1,000 to 2,800 stored records per chat window, so you can scroll further back using the normal chat interface.
+</p>
 
-- Ashita 4.3.1.2 or later with plugin interface 4.30 - built against 4.3.1.2's SDK and tested on 4.3.2.1.
+## ![Install](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Install&letterSpacing=0.5px&weight=700)
 
-## Installation
+Developed with **Ashita v4.3.1.2**, plugin interface **4.30**.
 
-Download `ChatHistoryPlus-vX.Y_Interface-N.NN.zip` from [Releases](https://github.com/SQLCommit/ChatHistoryPlus/releases) - the one whose
-`Interface-N.NN` matches your Ashita's plugin interface (each release's notes say which) - and extract it into your
-Ashita folder. It adds `chathistoryplus.dll` to `plugins\` and its docs to `docs\chathistoryplus\`. GitHub's
-"Source code" zip is not the plugin. Then:
+1. [Download latest release of ChatHistoryPlus](https://github.com/SQLCommit/ChatHistoryPlus/releases/latest). Choose the plugin ZIP whose `Interface-N.NN` matches your Ashita plugin interface; GitHub's source-code ZIP does not include the DLL.
+2. Extract into `/ashita/`. The plugin should be at `/ashita/plugins/chathistoryplus.dll`.
+3. In game, run `/load chathistoryplus`.
 
-```
-/load chathistoryplus
-```
+**Load automatically:** Add `/load chathistoryplus` to your startup script in `/ashita/scripts/`.
 
-> If you load it partway through a session your chat log has usually already started filling, and it
-> cannot switch over safely at that point. It arms itself and applies at your next login instead.
-> See [Why it only switches at login](#why-it-only-switches-at-login).
+Tested on Ashita **v4.3.2.1**. Load before logging in. If a history page has already closed, the plugin waits for your next login before enabling the larger history.
 
-## Commands
+## ![Features](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Features&letterSpacing=0.5px&weight=700)
 
-| Command | Description |
-|---------|-------------|
-| `/chathistoryplus status` | Whether it is on, and how much history is held |
-| `/chathistoryplus diag` | Write a full report to your character's log |
+| Feature | What it does |
+| :--- | :--- |
+| **Longer history** | Keeps 2,800 stored records per window, plus the current live page. |
+| **Native controls** | Uses FFXI's existing chat window and scrollback. |
+| **Automatic activation** | Applies when the history can safely switch to the larger capacity. |
+| **Diagnostics** | Shows activation status and writes reports for troubleshooting. |
 
-`/chp` for short.
+**How the larger history works**
+FFXI retains 20 stored pages per chat window, with 50 records on each. ChatHistoryPlus raises the page size to **140 records**, giving **2,800 stored records per window**, plus the current live page.
 
-## Why it only switches at login
+Changing the page limit alone would overrun the client's fixed 50-entry index. The plugin supplies a larger index for each page while the text stays in FFXI's own buffers. It also raises the text-buffer limit to **128 KB** so color-heavy lines have more room. Saved pages use a wider header; the plugin can read both the original and expanded formats.
 
-The client finds record *N* by dividing: `page = idx / recordsPerPage`. That divisor is **one global
-constant**, so changing it does not only affect new pages - it re-interprets every page that already
-exists.
+**Why activation may wait**
+The client uses the page size to locate every record. Changing it after a 50-record page has closed would make existing history resolve to the wrong places, leaving gaps or stopping scrollback. The plugin waits until both windows have no stored pages and their live pages can be converted safely—normally at login. Check `/chp status` to see whether it is active or waiting.
 
-With seven pages already closed at 50 records, record 100 lives in page 2. Flip the divisor to 140
-and the client looks for it in page 0, slot 100 - a slot that page does not have. That empty slot is
-a **hole**, and the rebuild that draws your log stops dead when it reaches one. You would not lose a
-line; you would lose everything past it.
+**With ChatLogFix:** ChatHistoryPlus expands stored scrollback. ChatLogFix fills the visible expanded log and fixes concurrent chat-buffer access. Neither makes the other redundant.
 
-So every page in the store has to hold exactly the same number of records - not "at least", exactly,
-because it is the divisor for an index and not a capacity. The only moment that is guaranteed is when
-the store is **empty**, which is true at login and, once the first page closes, never again that
-session. The plugin waits for that moment by itself.
+## ![Reading the count](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Reading+the+count&letterSpacing=0.5px&weight=700)
 
-## What the numbers mean
+`/chp status` reports history **per chat window**, including the live page, so the count can exceed 2,800. Do not add the two windows together. A record can be a wrapped display line rather than a whole player message.
 
-`/chp status` reports one figure, and it is worth knowing what it counts:
+The visible window stays the same size, and the oldest stored page is still discarded when history fills.
 
-```
-Holding 2823 message(s) -- 20 stored page(s) + 23 live.
-Both chat windows keep their own copy of that same history, so this is the figure
-for each of them, not a total.
-```
+## ![Commands](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Commands&letterSpacing=0.5px&weight=700)
 
-FFXI keeps a **complete, separate history per chat window**, and both windows receive every line
-so the same message is stored twice, once in each. The figure is per window, not a total to be added up.
+| Command | Action |
+| :--- | :--- |
+| `/chp status` | Show activation status and retained history |
+| `/chp diag` | Write a diagnostic report to your character's log |
 
-## How It Works
+`/chathistoryplus` also works as the command prefix.
 
-**Your chat stays where it always was.** The plugin does not store your messages - it stores a larger
-index of them.
+## ![Updates and unloading](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Updates+and+unloading&letterSpacing=0.5px&weight=700)
 
-A chat page in the client is two things:
+A clean unload restores the native layout and allows a reload, including a newer build. Restoring the smaller layout can discard older history. If the plugin reports that cleanup could not finish, restart FFXI before loading it again.
 
-- an **offset table** - a fixed array of 50 entries at the front of the page object, where entry *i*
-  says at which byte message *i* starts;
-- a **text blob** - one buffer holding the actual text, with room for far more than 50 messages.
+## ![Logs and support](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Logs+and+support&letterSpacing=0.5px&weight=700)
 
-The messages live in the blob. The table is only an index into it.
+- Run `/chp diag` and include the log when [reporting a problem](https://github.com/SQLCommit/ChatHistoryPlus/issues).
+- **Files:** `/ashita/logs/chathistoryplus/<Name>_<id>/chathistoryplus.log`
+- Before login, logs go to `/ashita/logs/chathistoryplus/` and move into the character's log after login. Each log retains its newest 1 MB.
 
-### Why changing a constant is not enough
+For source builds, see [Build instructions](BUILD.md).
 
-Six places in the client hold the number 50, and it is a **divisor**: the client finds a message by
-computing `page = index / 50`. Patch those six to 140 and the arithmetic works perfectly at 140
-records a page.
+## ![Changelog](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Changelog&letterSpacing=0.5px&weight=700)
 
-The problem is physical. The offset table is **50 entries embedded in the object**, and the fields
-the client reads after it - the blob pointer, the blob size, the live count - sit at fixed offsets
-its compiled code already knows. A 140-entry array would push all of them along and every instruction
-reading them would land on the wrong thing.
+See the [changelog](CHANGELOG.md) for new features, improvements, and fixes in each release.
 
-So after the constants, the client can count to 140 and has nowhere to put entries 50-139.
+---
 
-### What the plugin holds
+## ![Thanks and credits](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Thanks+and+credits&letterSpacing=0.5px&weight=700)
 
-A **shadow table** per live page: the same kind of offsets, just 140 of them instead of 50, and held
-as 32-bit values. It detours the eight client functions that touch the index or the text buffer - the
-page constructor and destructor, append, resolve (the read path), recount, the two that load and save
-page files, and the one that frees the buffer - so the client behaves as though its array were larger.
-No message text is copied anywhere.
+- **Fel-FFXI** — Reporting lost log lines when multiple clients shared one Ashita folder.
+- **The Ashita team** — atom0s, Thorny, and the [Ashita community](https://discord.gg/Ashita).
 
-The text buffer has the same problem. The client tracks its size in a **signed 16-bit** field, so it
-breaks past 32,767 bytes - and a single record can reach 2,047, because colour codes cost bytes but no
-screen width. So the shadow carries the true size too, and the ceiling is raised to 128 KB. Without it a page fills before it holds 140 records and the rest
-store empty - blank lines, and scrollback that stops dead.
+## ![License](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=License&letterSpacing=0.5px&weight=700)
 
-Closed pages go to disk with a wider header, and the loader detects the header size when reading one
-back, so a file written at 50 and a file written at 140 are both readable.
-
-### Files
-
-Its own log is one file per character:
-`logs\chathistoryplus\<Name>_<id>\chathistoryplus.log` in the Ashita folder (the same `<Name>_<id>` folder name Ashita gives addon
-settings). Before you log in it writes to a startup file in `logs\chathistoryplus\`, which moves into your character's log at
-login. Each log keeps its newest 1 MB; older lines are trimmed away. Several game clients can run from one Ashita folder
-at once without losing a line.
-
-`/chp diag` writes a full report into your character's log. If something goes wrong, run it and send that log.
-
-### Three things worth knowing, all stock behaviour
-
-- It changes **nothing** about what is on screen. The chat window shows the same number of lines; you
-  can simply scroll back much further.
-- The page count stays at **20**. All the extra history comes from wider pages, not more of them.
-- The oldest page is still discarded once the store is full - at 2800 messages instead of 1000.
-
-## Version history
-
-See [CHANGELOG.md](CHANGELOG.md).
-
-## Thanks
-
-- **The Ashita Team** - atom0s, thorny, and the Ashita Discord community
-- **Fel-FFXI** - reported that several clients sharing one Ashita folder lost each other's diag and log lines
-
-## License
-
-MIT - see **LICENSE**.
+**ChatHistoryPlus is free and open source under the [MIT License](LICENSE).**
