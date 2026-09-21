@@ -22,7 +22,7 @@ ChatHistoryPlus increases FFXI’s native chat history from 1,000 to 2,800 store
 
 ## ![Install](https://readme-typing-svg.demolab.com/?font=Cinzel&size=25&duration=1&pause=0&color=638EBD&center=false&vCenter=true&repeat=false&width=600&height=42&lines=Install&letterSpacing=0.5px&weight=700)
 
-Developed with **Ashita v4.3.1.2**, plugin interface **4.30**.
+Developed with **Ashita v4.3.2.1**, plugin interface **4.30**.
 
 1. [Download latest release of ChatHistoryPlus](https://github.com/SQLCommit/ChatHistoryPlus/releases/latest). Choose the plugin ZIP whose `Interface-N.NN` matches your Ashita plugin interface; GitHub's source-code ZIP does not include the DLL.
 2. Extract into `/ashita/`. The plugin should be at `/ashita/plugins/chathistoryplus.dll`.
